@@ -88,6 +88,12 @@ the paper or the docstring, never from the trace itself.
 to maximize code coverage using the `Z3` Theorem Solver. Passing tests with `explore=` implies
 the code is valid against the mathematical formula across all reachable input paths.
 
+In a nutshell, correctness of numerical programs is two questions:
+1. Is the math itself correct?
+2. Is the code numerically stable?
+
+scikit-verify mostly answers the first question!
+
 ## Installation
 
 ```bash
