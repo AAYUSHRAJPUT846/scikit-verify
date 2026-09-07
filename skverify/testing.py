@@ -742,76 +742,6 @@ def check_property(fn, args, prop, assume=(), explore=True, samples=3):
     )
 
 
-class properties:
-    """Named lenses for the common structural facts, so a paper's
-    theorem is one line instead of a hand-rolled lambda. Each returns
-    a ``prop`` callable for :func:`check_property` /
-    ``@specifies.property``. ``n`` is the entry count of the result
-    at the traced shape."""
-
-    @staticmethod
-    def sums_to(value, n):
-        """Entries sum to exactly ``value``: softmax to 1, centered
-        data to 0."""
-        from .helpers import axis_idx
-
-        i0 = axis_idx(0)
-
-        def prop(F):
-            if isinstance(F, sympy.NDimArray):
-                total = sum(F[k] for k in range(n))
-            else:
-                total = sum(F.subs(i0, k) for k in range(n))
-            return sympy.Eq(total, value)
-
-        return prop
-
-    @staticmethod
-    def symmetric(n):
-        """result[i, j] == result[j, i] for every entry: Gram and
-        covariance matrices."""
-        from .helpers import axis_idx
-
-        i0, j0 = axis_idx(0), axis_idx(1)
-
-        def prop(F):
-            def entry(r, c):
-                if isinstance(F, sympy.NDimArray):
-                    return F[r, c]
-                return F.subs({i0: r, j0: c}, simultaneous=True)
-
-            return sympy.And(*[
-                sympy.Eq(entry(r, c), entry(c, r))
-                for r in range(n) for c in range(r + 1, n)
-            ])
-
-        return prop
-
-    @staticmethod
-    def annihilates(vector):
-        """The result matrix times ``vector`` is exactly zero: null
-        space facts (a spline penalty kills constants and linears)."""
-        from .helpers import axis_idx
-
-        i0, j0 = axis_idx(0), axis_idx(1)
-        n = len(vector)
-
-        def prop(F):
-            def entry(r, c):
-                if isinstance(F, sympy.NDimArray):
-                    return F[r, c]
-                return F.subs({i0: r, j0: c}, simultaneous=True)
-
-            return sympy.And(*[
-                sympy.Eq(
-                    sum(entry(r, c) * vector[c] for c in range(n)), 0
-                )
-                for r in range(n)
-            ])
-
-        return prop
-
-
 def _property(prop, assume=(), explore=True):
     """Assert a property of the traced certificate, no closed form
     needed.
@@ -861,4 +791,3 @@ def _property(prop, assume=(), explore=True):
 
 
 specifies.property = _property
-specifies.properties = properties

@@ -280,39 +280,66 @@ class TestPropertyRung:
         v2 = check_property(f, (np.array([1.0, 2.0]),), prop)
         assert not v2.matches  # explored: caught on the other branch
 
-    def test_sums_to_lens_softmax(self):
+    def test_softmax_normalizes_via_lambda(self):
         import scipy.special as sp
-        from skverify.testing import check_property, properties
+        from skverify.helpers import axis_idx
+        from skverify.testing import check_property
 
+        i0 = axis_idx(0)
         v = check_property(
             lambda v: sp.softmax(v), (np.array([0.7, -1.2, 2.5]),),
-            properties.sums_to(1, 3),
+            lambda F: sympy.Eq(sum(
+                (F[k] if isinstance(F, sympy.NDimArray) else F.subs(i0, k))
+                for k in range(3)
+            ), 1),
         )
         assert v.matches
         assert "all" in v.detail
 
-    def test_annihilates_lens_penalty_nullspace(self):
-        # the paper's null-space theorem as ONE LINE: the penalty
-        # matrix kills the constant vector
+    def test_penalty_nullspace_via_lambda(self):
+        # the paper's null-space theorem: the penalty matrix kills
+        # the constant vector, written as a plain lambda
         import sys
         sys.path.insert(0, "tests/testing")
         from test_penalty_matrix import penalty, KNOTS, KNOT_ASSUMPTIONS
-        from skverify.testing import check_property, properties
+        from skverify.helpers import axis_idx
+        from skverify.testing import check_property
 
         m = penalty(KNOTS.copy()).shape[0]
+        i0, j0 = axis_idx(0), axis_idx(1)
+
+        def entry(F, r, c):
+            if isinstance(F, sympy.NDimArray):
+                return F[r, c]
+            return F.subs({i0: r, j0: c}, simultaneous=True)
+
         v = check_property(
             penalty, (KNOTS.copy(),),
-            properties.annihilates([1.0] * m),
+            lambda F: sympy.And(*[
+                sympy.Eq(sum(entry(F, r, c) for c in range(m)), 0)
+                for r in range(m)
+            ]),
             assume=KNOT_ASSUMPTIONS,
         )
         assert v.matches
 
-    def test_symmetric_lens(self):
-        from skverify.testing import check_property, properties
+    def test_gram_symmetry_via_lambda(self):
+        from skverify.helpers import axis_idx
+        from skverify.testing import check_property
+
+        i0, j0 = axis_idx(0), axis_idx(1)
+
+        def entry(F, r, c):
+            if isinstance(F, sympy.NDimArray):
+                return F[r, c]
+            return F.subs({i0: r, j0: c}, simultaneous=True)
 
         v = check_property(
             lambda a: a.T @ a, (np.arange(6.0).reshape(2, 3) + 1,),
-            properties.symmetric(3),
+            lambda F: sympy.And(*[
+                sympy.Eq(entry(F, r, c), entry(F, c, r))
+                for r in range(3) for c in range(r + 1, 3)
+            ]),
         )
         assert v.matches
 
