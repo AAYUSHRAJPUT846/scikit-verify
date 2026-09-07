@@ -260,3 +260,75 @@ class TestProbingFindings:
         )
         assert v.tier == "undecided"
         assert "qq" in v.detail
+
+
+class TestPropertyRung:
+    def test_property_false_on_the_other_branch(self):
+        # nonneg output holds on the traced (positive-sum) branch,
+        # fails on the branch where the input flips sign
+        def f(v):
+            if v.sum() > 0:
+                return v * v          # entries nonneg: property holds
+            return v * 3.0            # sign preserved: property fails
+
+        from skverify.testing import check_property
+        prop = lambda F: F.subs(sympy.Symbol("i", integer=True), 0) >= 0
+
+        v1 = check_property(f, (np.array([1.0, 2.0]),), prop, explore=False)
+        assert v1.matches  # single path: true there, honestly
+
+        v2 = check_property(f, (np.array([1.0, 2.0]),), prop)
+        assert not v2.matches  # explored: caught on the other branch
+
+    def test_sums_to_lens_softmax(self):
+        import scipy.special as sp
+        from skverify.testing import check_property, properties
+
+        v = check_property(
+            lambda v: sp.softmax(v), (np.array([0.7, -1.2, 2.5]),),
+            properties.sums_to(1, 3),
+        )
+        assert v.matches
+        assert "all" in v.detail
+
+    def test_annihilates_lens_penalty_nullspace(self):
+        # the paper's null-space theorem as ONE LINE: the penalty
+        # matrix kills the constant vector
+        import sys
+        sys.path.insert(0, "tests/testing")
+        from test_penalty_matrix import penalty, KNOTS, KNOT_ASSUMPTIONS
+        from skverify.testing import check_property, properties
+
+        m = penalty(KNOTS.copy()).shape[0]
+        v = check_property(
+            penalty, (KNOTS.copy(),),
+            properties.annihilates([1.0] * m),
+            assume=KNOT_ASSUMPTIONS,
+        )
+        assert v.matches
+
+    def test_symmetric_lens(self):
+        from skverify.testing import check_property, properties
+
+        v = check_property(
+            lambda a: a.T @ a, (np.arange(6.0).reshape(2, 3) + 1,),
+            properties.symmetric(3),
+        )
+        assert v.matches
+
+    def test_decorator_property_explores_by_default(self):
+        from skverify.testing import specifies
+
+        def g(v):
+            if v.sum() > 0:
+                return v * v
+            return v * 3.0
+
+        @specifies.property(
+            lambda F: F.subs(sympy.Symbol("i", integer=True), 0) >= 0
+        )
+        def check():
+            return g, (np.array([1.0, 2.0]),)
+
+        with pytest.raises(AssertionError):
+            check()

@@ -618,7 +618,201 @@ def specifies(spec, indices=(), assume=(), explore=True):
     return deco
 
 
-def _property(prop, assume=()):
+def check_property(fn, args, prop, assume=(), explore=True, samples=3):
+    """Check a FACT about what the code computes, on every reachable
+    path: the property rung. Where check_formula needs the closed
+    form, this needs only what the paper proves about it (symmetry,
+    normalization, a null space).
+
+    Parameters
+    ----------
+    fn, args
+        As in :func:`check_formula`.
+    prop : callable
+        Receives the traced formula, returns a sympy relation (or
+        boolean). Checked per path.
+    assume : iterable of sympy relations, optional
+        The property's domain; constrains exploration and sampling.
+    explore : bool, optional
+        True by default: the property is checked on every reachable
+        branch, since a fact that holds on the traced path can fail
+        on another.
+
+    Returns
+    -------
+    Verdict
+    """
+    if explore:
+        from .explore import explore as _explore
+
+        ex = _explore(fn, args, constraints=tuple(assume))
+        outs = [p.out for p in ex.paths]
+        cover_note = "; " + ex.summary()
+    else:
+        try:
+            outs = [to_sympy(fn, *args)]
+        except NotImplementedError as e:
+            return Verdict(
+                tier="incomplete",
+                shape=tuple(np.shape(args[0])),
+                detail=f"the tracer refused: {e} (a tracer limit, not a code bug)",
+            )
+        cover_note = " (single traced path)"
+    if not outs:
+        return Verdict(tier="incomplete", shape=tuple(np.shape(args[0])),
+                       detail="no path traced" + cover_note)
+    sampled = False
+
+    def check_claim(claim, out):
+        """None when the claim holds on this path; (verdict, used)
+        otherwise. And decomposes; Eq goes by symbolic residual;
+        inequalities by entailment (guards and assume imply claim,
+        a solver model of the negation is the failing input)."""
+        if claim in (True, sympy.true):
+            return None, False
+        if claim in (False, sympy.false):
+            return Verdict(
+                tier="differs", shape=tuple(np.shape(out.value)),
+                spec=claim, traced=out.formula,
+                detail="property is False on a path" + cover_note,
+            ), False
+        if isinstance(claim, sympy.And):
+            any_used = False
+            for part in claim.args:
+                v, used = check_claim(part, out)
+                any_used = any_used or used
+                if v is not None:
+                    return v, any_used
+            return None, any_used
+        if isinstance(claim, sympy.Eq):
+            verdict, used = _entry_equal(
+                claim.lhs - claim.rhs, sympy.Integer(0), (), samples,
+                assume, getattr(out, "preconditions", ()),
+            )
+            return verdict, used
+        # inequality: guards & assume must ENTAIL it
+        from .explore import _refuted, _witness, _witness_z3
+
+        guards = getattr(out, "preconditions", sympy.true)
+        guard_atoms = (
+            list(guards.args) if isinstance(guards, sympy.And)
+            else [] if guards in (sympy.true, True) else [guards]
+        )
+        target = (
+            [a for a in assume if isinstance(a, sympy.Basic)]
+            + guard_atoms + [sympy.Not(claim)]
+        )
+        wit = _witness_z3(target)
+        if wit is None:
+            wit = _witness(target, np.random.default_rng(0))
+        if wit is not None:
+            point = {str(k): v for k, v in wit.items()}
+            return Verdict(
+                tier="differs", shape=tuple(np.shape(out.value)),
+                spec=claim, traced=out.formula,
+                counterexample=point,
+                detail="property fails at this input" + cover_note,
+            ), True
+        if _refuted(target):
+            return None, False  # entailment proven
+        return Verdict(
+            tier="undecided", shape=tuple(np.shape(out.value)),
+            spec=claim, traced=out.formula,
+            detail="could not prove or refute the property" + cover_note,
+        ), True
+
+    for out in outs:
+        claim = prop(out.formula)
+        verdict, used = check_claim(claim, out)
+        sampled = sampled or used
+        if verdict is not None:
+            verdict.spec = claim
+            verdict.traced = out.formula
+            if "property" not in verdict.detail:
+                verdict.detail = (
+                    "property does not hold: " + str(claim)[:160]
+                    + cover_note
+                )
+            verdict.shape = tuple(np.shape(out.value))
+            return verdict
+    tier = "sampled" if sampled else "exact"
+    return Verdict(
+        tier=tier, shape=tuple(np.shape(outs[0].value)),
+        detail=f"property holds on all {len(outs)} path(s)" + cover_note,
+    )
+
+
+class properties:
+    """Named lenses for the common structural facts, so a paper's
+    theorem is one line instead of a hand-rolled lambda. Each returns
+    a ``prop`` callable for :func:`check_property` /
+    ``@specifies.property``. ``n`` is the entry count of the result
+    at the traced shape."""
+
+    @staticmethod
+    def sums_to(value, n):
+        """Entries sum to exactly ``value``: softmax to 1, centered
+        data to 0."""
+        from .helpers import axis_idx
+
+        i0 = axis_idx(0)
+
+        def prop(F):
+            if isinstance(F, sympy.NDimArray):
+                total = sum(F[k] for k in range(n))
+            else:
+                total = sum(F.subs(i0, k) for k in range(n))
+            return sympy.Eq(total, value)
+
+        return prop
+
+    @staticmethod
+    def symmetric(n):
+        """result[i, j] == result[j, i] for every entry: Gram and
+        covariance matrices."""
+        from .helpers import axis_idx
+
+        i0, j0 = axis_idx(0), axis_idx(1)
+
+        def prop(F):
+            def entry(r, c):
+                if isinstance(F, sympy.NDimArray):
+                    return F[r, c]
+                return F.subs({i0: r, j0: c}, simultaneous=True)
+
+            return sympy.And(*[
+                sympy.Eq(entry(r, c), entry(c, r))
+                for r in range(n) for c in range(r + 1, n)
+            ])
+
+        return prop
+
+    @staticmethod
+    def annihilates(vector):
+        """The result matrix times ``vector`` is exactly zero: null
+        space facts (a spline penalty kills constants and linears)."""
+        from .helpers import axis_idx
+
+        i0, j0 = axis_idx(0), axis_idx(1)
+        n = len(vector)
+
+        def prop(F):
+            def entry(r, c):
+                if isinstance(F, sympy.NDimArray):
+                    return F[r, c]
+                return F.subs({i0: r, j0: c}, simultaneous=True)
+
+            return sympy.And(*[
+                sympy.Eq(
+                    sum(entry(r, c) * vector[c] for c in range(n)), 0
+                )
+                for r in range(n)
+            ])
+
+        return prop
+
+
+def _property(prop, assume=(), explore=True):
     """Assert a property of the traced certificate, no closed form
     needed.
 
@@ -652,18 +846,13 @@ def _property(prop, assume=()):
     def deco(test_fn):
         def wrapper():
             fn, args = test_fn()
-            out = to_sympy(fn, *args)
-            claim = prop(out.formula)
-            if claim in (True, sympy.true):
-                return
-            d = sympy.simplify(
-                (claim.lhs - claim.rhs).doit()
-                if isinstance(claim, sympy.Eq)
-                else claim
-            )
-            assert d in (0, sympy.true), (
-                f"property does not hold: {claim} (residual: {d})"
-            )
+            v = check_property(fn, args, prop, assume=assume,
+                               explore=explore)
+            if v.tier == "incomplete":
+                import pytest
+
+                pytest.skip(v.message())
+            assert v.matches, v.message()
 
         wrapper.__name__ = test_fn.__name__
         return wrapper
@@ -672,3 +861,4 @@ def _property(prop, assume=()):
 
 
 specifies.property = _property
+specifies.properties = properties
