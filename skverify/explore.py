@@ -385,6 +385,31 @@ def _rewrite_sqrt_rels(expr):
     return expr.replace(is_rel, repl)
 
 
+def _push_not_down(expr):
+    """Negation-normal form at the sympy level: Not distributes over
+    And/Or and dissolves into flipped relationals. The converter must
+    NEVER wrap z3.Not around an aux-carrying formula (the existential
+    helper flips universal and invents models), so any Not that
+    cannot be eliminated here makes the atom unconvertible."""
+    import sympy as sp
+
+    if isinstance(expr, sp.Not):
+        inner = expr.args[0]
+        if isinstance(inner, sp.And):
+            return sp.Or(*[_push_not_down(sp.Not(a)) for a in inner.args])
+        if isinstance(inner, sp.Or):
+            return sp.And(*[_push_not_down(sp.Not(a)) for a in inner.args])
+        if isinstance(inner, sp.Not):
+            return _push_not_down(inner.args[0])
+        neg = getattr(inner, "negated", None)
+        if neg is not None:
+            return neg
+        return expr  # unresolvable Not: conversion will refuse
+    if isinstance(expr, (sp.And, sp.Or)):
+        return expr.func(*[_push_not_down(a) for a in expr.args])
+    return expr
+
+
 def _to_z3(expr, z3, varmap):
     """One sympy guard atom -> one z3 formula, real semantics.
     Returns None for anything outside the decidable fragment (exp,
@@ -510,8 +535,8 @@ def _to_z3(expr, z3, varmap):
             parts = [bconv(a) for a in expr.args]
             return None if any(pp is None for pp in parts) else z3.Or(*parts)
         if isinstance(expr, sp.Not):
-            inner = bconv(expr.args[0])
-            return None if inner is None else z3.Not(inner)
+            return None  # Not must dissolve in NNF; wrapping z3.Not
+                         # around aux constraints would be unsound
         for cls, mk in _RELS:
             if isinstance(expr, cls):
                 l, r = conv(expr.lhs), conv(expr.rhs)
@@ -525,6 +550,8 @@ def _to_z3(expr, z3, varmap):
              (sp.Eq, lambda a, b: a == b), (sp.Ne, lambda a, b: a != b)]
     if expr.has(sp.Piecewise):
         expr = _lower_piecewise_rels(expr)
+    if expr.has(sp.Not):
+        expr = _push_not_down(expr)
     if expr.has(sp.Pow):
         expr = _rewrite_sqrt_rels(expr)
     if expr in (sp.true, True):
