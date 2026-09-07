@@ -86,9 +86,10 @@ concrete counterexample. The
 [penalty matrix notebook](examples/penalty_matrix_check.ipynb) is
 this in action on a real derivation.
 
-`explore=True` extends the claim to every branch: the Z3 solver
-finds inputs for the paths your test data never took, or proves no
-such inputs exist.
+The decorator checks every reachable branch by default: the Z3
+solver finds inputs for the paths your test data never took, or
+proves no such inputs exist. A green test cannot hide an unchecked
+branch.
 
 ```python
 def f(v):
