@@ -19,6 +19,7 @@
 * [skverify-mcp](skverify-mcp/) - MCP for mathematical feedback for coding agents
 * [Blog post](https://medium.com/@aadyachinubhai/scikit-verify-translate-python-numpy-programs-to-symbolic-mathematics-c664d41ba571) - the story and the mathematics, with examples
 * [Demo](examples/penalty_matrix_check.ipynb) - a 20-page SciPy derivation, checked
+* [Branch coverage](examples/branch_coverage_check.ipynb) - every path visited or proven unreachable
 
 scikit-verify is a tracer for numerical Python. It runs your NumPy
 function once and returns the formula it computed, as an ordinary SymPy
@@ -79,17 +80,15 @@ def test_simpson_is_the_textbook_rule():
     return (lambda v: simpson(v)), (np.array([0.7, 1.2, 2.5, 0.3, 0.4]),)
 ```
 
-The comparison is symbolic, a passing test means the code
-computes that formula for every input of that shape, and a failing one
-prints both formulas with a concrete counterexample. Specs come from
-the paper or the docstring, never from the trace itself. 
+A passing test means the code computes that formula, proved
+symbolically, not sampled; a failing one prints both formulas with a
+concrete counterexample. The
+[penalty matrix notebook](examples/penalty_matrix_check.ipynb) is
+this in action on a real derivation.
 
-One trace follows one path, so that claim holds for the branch your
-input took. The `explore=True` flag visits the rest: every branch
-condition is negated and handed to the Z3 solver, which either
-produces an input for the other side or proves no such input exists.
-A spec that is right on your branch and wrong on another now fails,
-with the guilty branch printed:
+`explore=True` extends the claim to every branch: the Z3 solver
+finds inputs for the paths your test data never took, or proves no
+such inputs exist.
 
 ```python
 def f(v):
@@ -104,10 +103,10 @@ check_formula(f, (np.array([1.0, 2.0]),), 2 * v[i], indices=(i,), explore=True)
 #   on the path where: Sum(v[j], (j, 0, 1)) <= 0
 ```
 
-And a passing one upgrades from "on the traced path" to a proof:
-measured over every public numpy function the tracer lifts, 274 of
-293 get full branch coverage proven, with every unvisited region
-either refuted by the solver or named honestly.
+Measured over every public numpy function the tracer lifts, 274 of
+293 get full branch coverage proven. The
+[branch coverage notebook](examples/branch_coverage_check.ipynb)
+tells the whole story.
 
 In a nutshell, correctness of numerical programs is two questions:
 1. Is the math itself correct?
