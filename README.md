@@ -104,8 +104,8 @@ check_formula(f, (np.array([1.0, 2.0]),), 2 * v[i], indices=(i,), explore=True)
 #   on the path where: Sum(v[j], (j, 0, 1)) <= 0
 ```
 
-When nobody knows the closed form, state a FACT about it instead --
-the entries sum to one, the matrix is symmetric, a null space holds:
+When nobody knows the closed form, state a fact about it instead.
+The entries sum to one, the matrix is symmetric, a null space holds:
 
 ```python
 @specifies.property(lambda F: sympy.Eq(sum(F.subs(i, k) for k in range(3)), 1))
