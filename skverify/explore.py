@@ -386,12 +386,16 @@ def _witness_z3(target):
     return subs
 
 
-def explore(fn, args, max_paths=MAX_PATHS, seed=0, time_budget=120.0):
+def explore(fn, args, max_paths=MAX_PATHS, seed=0, time_budget=120.0,
+            constraints=()):
     """Trace ``fn`` on ``args``, then keep finding inputs that take
     other branches until every branch is visited or proven infeasible.
 
     Returns an :class:`Exploration`; ``.complete`` is the covers()
-    claim: the visited paths provably cover every input of this shape.
+    claim: the visited paths provably cover every input of this shape
+    that satisfies ``constraints`` (a spec's assume= domain: branches
+    only reachable OUTSIDE the stated domain are not part of the
+    claim, and witnesses are only sought inside it).
     ``time_budget`` (seconds of wall clock) ends exploration honestly:
     past it the result is marked capped and completeness is never
     claimed.
@@ -428,18 +432,20 @@ def explore(fn, args, max_paths=MAX_PATHS, seed=0, time_budget=120.0):
                 break
             target = list(atoms[:k]) + [_negate(atoms[k])]
             tsig = frozenset(target)
+            full = [c for c in constraints if isinstance(c, sympy.Basic)] \
+                + target
             if tsig in seen:
                 continue
-            wit = _witness_z3(target)
+            wit = _witness_z3(full)
             if wit is not None and not all(
-                _holds(a, wit) for a in _unrolled(target)
+                _holds(a, wit) for a in _unrolled(full)
             ):
                 wit = None  # model failed verification: never trust it
             if wit is None:
-                wit = _witness(target, rng)
+                wit = _witness(full, rng)
             if wit is not None:
                 worklist.append(_rebuild_args(fn, cur, wit))
-            elif _refuted(target):
+            elif _refuted(full):
                 result.infeasible.append(sympy.And(*target))
                 seen.add(tsig)
             else:

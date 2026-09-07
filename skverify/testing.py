@@ -140,7 +140,7 @@ def _check_everywhere(fn, args, spec, indices, assume, samples):
     of the detail, so "all paths" is claimed only when proven."""
     from .explore import explore as _explore
 
-    ex = _explore(fn, args)
+    ex = _explore(fn, args, constraints=tuple(assume))
     if not ex.paths:
         return Verdict(
             tier="incomplete",
@@ -511,7 +511,7 @@ def _entry_equal(t, s, entry, samples, assume=(), guards=()):
     ), True
 
 
-def specifies(spec, indices=(), assume=()):
+def specifies(spec, indices=(), assume=(), explore=True):
     """Assert that a function implements a formula, as a pytest test.
 
     The decorated test RETURNS ``(fn, args)`` instead of calling
@@ -528,6 +528,12 @@ def specifies(spec, indices=(), assume=()):
         Index symbols bound to output axes in order.
     assume : iterable of sympy relations, optional
         The derivation's preconditions; sample points respect them.
+    explore : bool, optional
+        True by default: the spec is checked on EVERY reachable
+        branch (Z3 finds inputs for the paths the test data never
+        took), so a green checkmark cannot hide an unchecked branch.
+        Pass ``explore=False`` for the faster single-path check when
+        a branchy function makes exploration slow.
 
     Examples
     --------
@@ -569,7 +575,8 @@ def specifies(spec, indices=(), assume=()):
     def deco(test_fn):
         def wrapper():
             fn, args = test_fn()
-            v = check_formula(fn, args, spec, indices=indices, assume=assume)
+            v = check_formula(fn, args, spec, indices=indices,
+                              assume=assume, explore=explore)
             if v.tier == "incomplete":
                 import pytest
 

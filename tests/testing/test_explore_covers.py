@@ -195,3 +195,24 @@ class TestSharpEdges:
         r = explore(sincish, (np.array([0.7, -1.2, 2.5]),))
         assert r.complete
         assert len(r.paths) == 8  # every zero/nonzero combination
+
+
+class TestSpecifiesExplores:
+    def test_decorator_catches_the_other_branch_by_default(self):
+        from skverify.testing import specifies
+
+        @specifies(2 * V[i], indices=(i,))
+        def check():
+            return two_branch, (np.array([1.0, 2.0]),)
+
+        with pytest.raises(AssertionError, match="on the path where"):
+            check()
+
+    def test_explore_false_restores_single_path(self):
+        from skverify.testing import specifies
+
+        @specifies(2 * V[i], indices=(i,), explore=False)
+        def check():
+            return two_branch, (np.array([1.0, 2.0]),)
+
+        check()  # passes: the positive-sum path really computes 2v
