@@ -191,6 +191,34 @@ def _check_traced(out, spec, indices, assume, samples):
             and sym != by_name[sym.name]
         ):
             bound[sym] = by_name[sym.name]
+    traced_bases = {
+        e.base.label.name
+        for x in ([out.formula] if isinstance(out.formula, sympy.Basic)
+                  else list(out.formula)
+                  if isinstance(out.formula, sympy.NDimArray) else [])
+        if isinstance(x, sympy.Basic)
+        for e in x.atoms(sympy.Indexed)
+    }
+    unknown = sorted(
+        s.name for s in spec.free_symbols
+        if isinstance(s, sympy.Symbol)
+        and s not in bound
+        and not isinstance(s, sympy.tensor.indexed.IndexedBase)
+        and s.name not in by_name
+        and s.name not in traced_bases
+        and not any(s in f.free_symbols for f in bound)
+    )
+    if unknown:
+        return Verdict(
+            tier="undecided",
+            shape=shape,
+            spec=spec,
+            detail=(
+                "the spec references symbols the trace does not: "
+                + ", ".join(unknown)
+                + " (a typo, or a constant that should be a number?)"
+            ),
+        )
     spec_b = spec.xreplace(bound) if bound else spec
     if bound and assume:
         assume = [

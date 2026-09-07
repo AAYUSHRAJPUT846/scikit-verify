@@ -216,3 +216,47 @@ class TestSpecifiesExplores:
             return two_branch, (np.array([1.0, 2.0]),)
 
         check()  # passes: the positive-sum path really computes 2v
+
+
+class TestProbingFindings:
+    def test_covers_is_a_theorem_not_bookkeeping(self):
+        # median of 3 has SIX orderings; prefix bookkeeping over
+        # canonically sorted guards found five and claimed complete.
+        # The closing Z3 tautology check finds the sixth.
+        r = explore(lambda v: np.median(v), (np.array([1.0, 2.0, 3.0]),))
+        assert r.complete
+        assert len(r.paths) == 6
+
+    def test_sqrt_guard_disjunction_verifiable(self):
+        # w = sqrt(x) encodes as w >= 0 and w*w = x: norm-style
+        # guards get proven coverage instead of honest defeat
+        def norm_branch(v):
+            n = np.sqrt((v ** 2).sum())
+            if n > 1.0:
+                return v / n
+            return v
+
+        r = explore(norm_branch, (np.array([1.0, 2.0]),))
+        assert r.complete
+        assert len(r.paths) == 2
+
+    def test_raising_region_is_a_reported_outcome(self):
+        # research code validates input by raising; the explorer must
+        # report the region, not crash
+        def guarded(v):
+            if v.sum() < 0:
+                raise ValueError("negative data not allowed")
+            return v * 2.0
+
+        r = explore(guarded, (np.array([1.0, 2.0]),))
+        assert not r.complete
+        assert r.errors and "ValueError" in r.errors[0]
+        assert "RAISES" in r.summary()
+
+    def test_typo_spec_symbol_is_named_not_arbitrated(self):
+        v = check_formula(
+            lambda v: v * 2.0, (np.array([1.0, 2.0]),),
+            sympy.Symbol("qq") * V[i], indices=(i,),
+        )
+        assert v.tier == "undecided"
+        assert "qq" in v.detail

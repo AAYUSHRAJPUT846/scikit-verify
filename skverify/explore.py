@@ -42,6 +42,7 @@ class Exploration:
     infeasible: list = field(default_factory=list)  # refuted regions
     undecided: list = field(default_factory=list)   # neither witnessed nor refuted
     refusals: list = field(default_factory=list)    # paths the tracer refused
+    errors: list = field(default_factory=list)      # regions where the REAL code raises
     capped: bool = False  # stopped at max_paths with work remaining
 
     @property
@@ -53,6 +54,7 @@ class Exploration:
         return (
             not self.undecided
             and not self.refusals
+            and not self.errors
             and not self.capped
             and bool(self.paths)
         )
@@ -65,6 +67,10 @@ class Exploration:
             parts.append(f"{len(self.undecided)} region(s) UNDECIDED")
         if self.refusals:
             parts.append(f"{len(self.refusals)} path(s) refused by the tracer")
+        if self.errors:
+            parts.append(
+                f"{len(self.errors)} region(s) where the code RAISES"
+            )
         if self.capped:
             parts.append("stopped at the path cap with work remaining")
         head = ", ".join(parts)
@@ -242,15 +248,17 @@ def _refuted(target):
     try:
         target = _unrolled(target)
         varmap = {}
+        side = []
         constraints = []
         for a in target:
-            c = _to_z3(a, z3, varmap)
+            c = _to_z3(a, z3, varmap, side)
             if c is None:
                 return False  # outside the fragment: cannot refute
             constraints.append(c)
         solver = z3.Solver()
         solver.set("timeout", 1000)
         solver.add(*constraints)
+        solver.add(*side)
         return solver.check() == z3.unsat
     except Exception:
         return False
@@ -297,10 +305,15 @@ def _rebuild_args(fn, base_args, subs):
 
 
 
-def _to_z3(expr, z3, varmap):
+def _to_z3(expr, z3, varmap, side=None):
     """sympy relational/arithmetic -> z3, real semantics. Returns None
-    for anything outside the polynomial fragment (exp, log, ...)."""
+    for anything outside the polynomial fragment (exp, log, ...).
+    ``side`` collects auxiliary constraints (sqrt encodings); callers
+    must add them to the solver alongside the returned formula."""
     import sympy as sp
+
+    if side is None:
+        side = []
 
     def conv(e):
         if isinstance(e, sp.Indexed) or isinstance(e, sp.Symbol):
@@ -331,6 +344,16 @@ def _to_z3(expr, z3, varmap):
                 out = out * p
             return out
         if isinstance(e, sp.Pow):
+            if e.exp == sp.Rational(1, 2):
+                # sqrt encodes exactly: w >= 0 and w*w = base
+                inner = conv(e.base)
+                if inner is None:
+                    return None
+                w = z3.Real(f"sqrt{len(varmap)}")
+                varmap[sp.Dummy(f"_sqrt{len(varmap)}")] = w
+                side.append(w >= 0)
+                side.append(w * w == inner)
+                return w
             base = conv(e.base)
             if base is None or not e.exp.is_Integer or e.exp < 0:
                 return None
@@ -343,18 +366,55 @@ def _to_z3(expr, z3, varmap):
             if inner is None:
                 return None
             return z3.If(inner >= 0, inner, -inner)
+        if isinstance(e, (sp.Max, sp.Min)):
+            parts = [conv(a) for a in e.args]
+            if any(pp is None for pp in parts):
+                return None
+            out = parts[0]
+            pick = (lambda a, b: z3.If(a >= b, a, b)) \
+                if isinstance(e, sp.Max) else (lambda a, b: z3.If(a <= b, a, b))
+            for pp in parts[1:]:
+                out = pick(out, pp)
+            return out
+        if isinstance(e, sp.Piecewise):
+            # exact as nested If; conditions convert as booleans
+            out = None
+            for val, cond in reversed(e.args):
+                v = conv(val)
+                if v is None:
+                    return None
+                if cond in (sp.true, True):
+                    out = v
+                    continue
+                c = bconv(cond)
+                if c is None or out is None:
+                    return None
+                out = z3.If(c, v, out)
+            return out
         return None
 
-    rel = {sp.Gt: lambda a, b: a > b, sp.Ge: lambda a, b: a >= b,
-           sp.Lt: lambda a, b: a < b, sp.Le: lambda a, b: a <= b,
-           sp.Eq: lambda a, b: a == b, sp.Ne: lambda a, b: a != b}
-    for cls, mk in rel.items():
-        if isinstance(expr, cls):
-            l, r = conv(expr.lhs), conv(expr.rhs)
-            if l is None or r is None:
-                return None
-            return mk(l, r)
-    return None
+    def bconv(expr):
+        if isinstance(expr, sp.And):
+            parts = [bconv(a) for a in expr.args]
+            return None if any(pp is None for pp in parts) else z3.And(*parts)
+        if isinstance(expr, sp.Or):
+            parts = [bconv(a) for a in expr.args]
+            return None if any(pp is None for pp in parts) else z3.Or(*parts)
+        if isinstance(expr, sp.Not):
+            inner = bconv(expr.args[0])
+            return None if inner is None else z3.Not(inner)
+        for cls, mk in _RELS:
+            if isinstance(expr, cls):
+                l, r = conv(expr.lhs), conv(expr.rhs)
+                if l is None or r is None:
+                    return None
+                return mk(l, r)
+        return None
+
+    _RELS = [(sp.Gt, lambda a, b: a > b), (sp.Ge, lambda a, b: a >= b),
+             (sp.Lt, lambda a, b: a < b), (sp.Le, lambda a, b: a <= b),
+             (sp.Eq, lambda a, b: a == b), (sp.Ne, lambda a, b: a != b)]
+    return bconv(expr)
 
 
 def _witness_z3(target):
@@ -365,20 +425,24 @@ def _witness_z3(target):
     the model is a candidate, never an oracle."""
     target = _unrolled(target)
     varmap = {}
+    side = []
     constraints = []
     for a in target:
-        c = _to_z3(a, z3, varmap)
+        c = _to_z3(a, z3, varmap, side)
         if c is None:
             return None  # outside the fragment: fall back to sampling
         constraints.append(c)
     solver = z3.Solver()
     solver.set("timeout", 1000)
     solver.add(*constraints)
+    solver.add(*side)
     if solver.check() != z3.sat:
         return None
     model = solver.model()
     subs = {}
     for sym, var in varmap.items():
+        if isinstance(sym, sympy.Dummy) and sym.name.startswith("_sqrt"):
+            continue  # auxiliary, not an input slot
         val = model.eval(var, model_completion=True)
         # exact rational out of z3 (decimals would round)
         frac = val.as_fraction()
@@ -407,7 +471,22 @@ def explore(fn, args, max_paths=MAX_PATHS, seed=0, time_budget=120.0,
     result = Exploration()
     seen = set()
     worklist = [tuple(args)]
-    while worklist:
+    while True:
+     if not worklist:
+        # bookkeeping PROPOSES coverage; the theorem is decided here:
+        # is the OR of path conditions a tautology over the domain?
+        # A model of its negation IS an input in a missed region --
+        # feed it back and keep exploring until Z3 says unsat.
+        gap = _coverage_gap(result.paths, constraints)
+        if gap is None:
+            break  # coverage proven
+        if gap == "unverifiable":
+            result.undecided.append(
+                sympy.Symbol("coverage_disjunction_unverifiable")
+            )
+            break
+        worklist.append(_rebuild_args(fn, tuple(args), gap))
+     while worklist:
         if len(result.paths) >= max_paths or _time.monotonic() > deadline:
             result.capped = True
             break
@@ -418,6 +497,13 @@ def explore(fn, args, max_paths=MAX_PATHS, seed=0, time_budget=120.0,
             ])
         except NotImplementedError as e:
             result.refusals.append(str(e)[:120])
+            continue
+        except Exception as e:
+            # the polite-failure contract already reran the REAL
+            # function: a propagating error means the code itself
+            # raises on this input. That is a path outcome (a domain
+            # boundary), not a crash of ours.
+            result.errors.append(f"{type(e).__name__}: {str(e)[:100]}")
             continue
         atoms = _atoms_of(getattr(out, "preconditions", sympy.true))
         sig = frozenset(atoms)
@@ -451,7 +537,55 @@ def explore(fn, args, max_paths=MAX_PATHS, seed=0, time_budget=120.0,
             else:
                 result.undecided.append(sympy.And(*target))
                 seen.add(tsig)
+     if (result.capped or result.undecided or result.refusals
+             or result.errors):
+        break  # completeness already impossible: no theorem to close
     return result
+
+
+def _coverage_gap(paths, constraints):
+    """A witness OUTSIDE every discovered path condition (and inside
+    the domain), or None when Z3 proves no such input exists, or
+    "unverifiable" when an atom falls outside the fragment. This is
+    covers() as a theorem instead of trusting loop bookkeeping."""
+    try:
+        varmap = {}
+        side = []
+        clauses = []
+        for p in paths:
+            atoms = []
+            for a in _unrolled(list(p.condition)):
+                c = _to_z3(a, z3, varmap, side)
+                if c is None:
+                    return "unverifiable"
+                atoms.append(c)
+            clauses.append(z3.And(*atoms) if atoms else z3.BoolVal(True))
+        solver = z3.Solver()
+        solver.set("timeout", 3000)
+        for a in _unrolled([c for c in constraints
+                            if isinstance(c, sympy.Basic)]):
+            c = _to_z3(a, z3, varmap, side)
+            if c is None:
+                return "unverifiable"
+            solver.add(c)
+        solver.add(*side)
+        solver.add(z3.Not(z3.Or(*clauses)) if clauses else z3.BoolVal(True))
+        res = solver.check()
+        if res == z3.unsat:
+            return None  # coverage proven
+        if res != z3.sat:
+            return "unverifiable"
+        model = solver.model()
+        subs = {}
+        for sym, var in varmap.items():
+            if isinstance(sym, sympy.Dummy) and sym.name.startswith("_sqrt"):
+                continue  # auxiliary, not an input slot
+            val = model.eval(var, model_completion=True)
+            frac = val.as_fraction()
+            subs[sym] = sympy.Rational(frac.numerator, frac.denominator)
+        return subs
+    except Exception:
+        return "unverifiable"
 
 
 def covers(fn, args, **kw):
