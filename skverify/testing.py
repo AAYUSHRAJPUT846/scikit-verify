@@ -53,7 +53,8 @@ class Verdict:
         return "\n".join(lines)
 
 
-def check_formula(fn, args, spec, indices=(), assume=(), samples=3):
+def check_formula(fn, args, spec, indices=(), assume=(), samples=3,
+                  explore=False):
     """Trace ``fn`` and compare its formula against ``spec``, per entry.
 
     The spec must come from outside the code -- a paper, a docstring,
@@ -83,6 +84,13 @@ def check_formula(fn, args, spec, indices=(), assume=(), samples=3):
     samples : int, optional
         Exact rational sample points used when the symbolic
         difference does not vanish (the float-constant tier).
+    explore : bool, optional
+        Check the spec on EVERY reachable branch, not just the one
+        ``args`` takes: branch guards are negated and solved for
+        inputs on the other side (see :func:`skverify.explore.explore`).
+        The verdict then reports coverage: "coverage proven" when
+        every unvisited region was proven infeasible, or an honest
+        qualifier when regions stay undecided.
 
     Returns
     -------
@@ -113,6 +121,8 @@ def check_formula(fn, args, spec, indices=(), assume=(), samples=3):
     ...               3 * V[i] + 1, indices=(i,)).tier
     'differs'
     """
+    if explore:
+        return _check_everywhere(fn, args, spec, indices, assume, samples)
     try:
         out = to_sympy(fn, *args)
     except NotImplementedError as e:
@@ -121,6 +131,41 @@ def check_formula(fn, args, spec, indices=(), assume=(), samples=3):
             shape=tuple(np.shape(args[0])),
             detail=f"the tracer refused: {e} (a tracer limit, not a code bug)",
         )
+    return _check_traced(out, spec, indices, assume, samples)
+
+
+def _check_everywhere(fn, args, spec, indices, assume, samples):
+    """The explored form: check the spec on EVERY reachable path.
+    The verdict is the weakest per-path tier; coverage status is part
+    of the detail, so "all paths" is claimed only when proven."""
+    from .explore import explore as _explore
+
+    ex = _explore(fn, args)
+    if not ex.paths:
+        return Verdict(
+            tier="incomplete",
+            shape=tuple(np.shape(args[0])),
+            detail="no path traced: " + "; ".join(ex.refusals[:2]),
+        )
+    order = {"exact": 0, "float-constant": 1, "sampled": 2}
+    worst = None
+    for path in ex.paths:
+        v = _check_traced(path.out, spec, indices, assume, samples)
+        if not v.matches:
+            cond = " & ".join(str(a) for a in path.condition) or "True"
+            v.detail = (v.detail + f"\n  on the path where: {cond}").strip()
+            return v
+        if worst is None or order.get(v.tier, 9) > order.get(worst.tier, 9):
+            worst = v
+    worst.detail = (
+        f"all {len(ex.paths)} path(s): " + worst.detail + "; " + ex.summary()
+    )
+    if not ex.complete:
+        worst.detail += " (matches on explored paths only)"
+    return worst
+
+
+def _check_traced(out, spec, indices, assume, samples):
     shape = tuple(np.shape(out.value))
     bound = {sym: axis_idx(k) for k, sym in enumerate(indices)}
     # traced scalar symbols carry real=True; a user's plain
@@ -409,8 +454,16 @@ def _entry_equal(t, s, entry, samples, assume=(), guards=()):
         },
         key=str,
     )
+    labels = {
+        e.base.label
+        for x in (td, sd)
+        for e in x.atoms(sympy.Indexed)
+    }
     syms = sorted(
-        (td - sd).free_symbols - set(sympy.symbols("i j k l m")), key=str
+        (td - sd).free_symbols
+        - set(sympy.symbols("i j k l m"))
+        - labels,  # an Indexed's base label is not an assignable input
+        key=str,
     )
     agree = True
     point = {}
