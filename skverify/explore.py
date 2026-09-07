@@ -248,17 +248,15 @@ def _refuted(target):
     try:
         target = _unrolled(target)
         varmap = {}
-        side = []
         constraints = []
         for a in target:
-            c = _to_z3(a, z3, varmap, side)
+            c = _to_z3(a, z3, varmap)
             if c is None:
                 return False  # outside the fragment: cannot refute
             constraints.append(c)
         solver = z3.Solver()
         solver.set("timeout", 1000)
         solver.add(*constraints)
-        solver.add(*side)
         return solver.check() == z3.unsat
     except Exception:
         return False
@@ -305,15 +303,101 @@ def _rebuild_args(fn, base_args, subs):
 
 
 
-def _to_z3(expr, z3, varmap, side=None):
-    """sympy relational/arithmetic -> z3, real semantics. Returns None
-    for anything outside the polynomial fragment (exp, log, ...).
-    ``side`` collects auxiliary constraints (sqrt encodings); callers
-    must add them to the solver alongside the returned formula."""
+def _lower_piecewise_rels(expr):
+    """A comparison whose side is a Piecewise is a case split in
+    disguise: Ne(Piecewise((1, C), (0, True)), 0) just means C.
+    Lowering to booleans BEFORE conversion keeps the z3 query small
+    (scipy's mask bridges produce exactly this shape, and converting
+    them as nested If-trees ground each solver call to its timeout).
+    Sound for any branch values: each case contributes
+    (its condition AND the comparison of its value)."""
     import sympy as sp
 
-    if side is None:
-        side = []
+    def is_rel(e):
+        return isinstance(e, sp.core.relational.Relational)
+
+    def repl(rel):
+        for a, b, flip in ((rel.lhs, rel.rhs, False),
+                           (rel.rhs, rel.lhs, True)):
+            if isinstance(a, sp.Piecewise):
+                branches, acc_not = [], []
+                for val, cond in a.args:
+                    r2 = rel.func(b, val) if flip else rel.func(val, b)
+                    if cond in (True, sp.true):
+                        c_full = sp.And(*acc_not) if acc_not else sp.true
+                    else:
+                        c_full = sp.And(*(acc_not + [cond]))
+                        acc_not.append(sp.Not(cond))
+                    branches.append(sp.And(c_full, r2))
+                return sp.Or(*branches)
+        return rel
+
+    for _ in range(3):  # nested Piecewise lowers in passes
+        new = expr.replace(is_rel, repl)
+        if new == expr:
+            break
+        expr = new
+    return expr
+
+
+def _rewrite_sqrt_rels(expr):
+    """Quantifier-free sqrt elimination for comparisons against
+    NUMBERS: sqrt(E) > c becomes E > c*c (for c >= 0), with E >= 0
+    carried where the truth of the atom requires sqrt to be defined.
+    Needed because the aux-variable sqrt encoding (exists w: w*w=E)
+    is only sound in positive contexts; under the negation the
+    coverage check performs, the existential flips universal and the
+    encoding invents fake gap models."""
+    import sympy as sp
+
+    def is_rel(e):
+        return isinstance(e, sp.core.relational.Relational)
+
+    def repl(rel):
+        for a, b, flip in ((rel.lhs, rel.rhs, False),
+                           (rel.rhs, rel.lhs, True)):
+            if (isinstance(a, sp.Pow) and a.exp == sp.Rational(1, 2)
+                    and b.is_number and b.is_real):
+                E = a.base
+                cls = type(rel) if not flip else {
+                    sp.Gt: sp.Lt, sp.Lt: sp.Gt, sp.Ge: sp.Le,
+                    sp.Le: sp.Ge, sp.Eq: sp.Eq, sp.Ne: sp.Ne,
+                }[type(rel)]
+                if b < 0:
+                    if cls in (sp.Gt, sp.Ge, sp.Ne):
+                        return sp.And(E >= 0, sp.true) if True else None
+                    return sp.false  # sqrt(E) < negative: impossible
+                bb = b ** 2
+                if cls is sp.Gt:
+                    return E > bb
+                if cls is sp.Ge:
+                    return E >= bb
+                if cls is sp.Lt:
+                    return sp.And(E >= 0, E < bb)
+                if cls is sp.Le:
+                    return sp.And(E >= 0, E <= bb)
+                if cls is sp.Eq:
+                    return sp.Eq(E, bb)
+                if cls is sp.Ne:
+                    return sp.Or(E < 0, sp.Ne(E, bb))
+        return rel
+
+    return expr.replace(is_rel, repl)
+
+
+def _to_z3(expr, z3, varmap):
+    """One sympy guard atom -> one z3 formula, real semantics.
+    Returns None for anything outside the decidable fragment (exp,
+    log, ...). Auxiliary facts from encodings (sqrt, division) are
+    conjoined INTO the returned formula, never leaked to the solver
+    globally: "this guard holds" means its expressions are defined
+    AND the comparison is true, so at a zero divisor or a negative
+    sqrt argument the atom is FALSE, exactly like the mathematics.
+    A global side constraint would instead force definedness over
+    the whole query and could hide coverage gaps."""
+    import sympy as sp
+
+    side = []
 
     def conv(e):
         if isinstance(e, sp.Indexed) or isinstance(e, sp.Symbol):
@@ -349,13 +433,38 @@ def _to_z3(expr, z3, varmap, side=None):
                 inner = conv(e.base)
                 if inner is None:
                     return None
-                w = z3.Real(f"sqrt{len(varmap)}")
-                varmap[sp.Dummy(f"_sqrt{len(varmap)}")] = w
+                w = z3.Real(f"aux{len(varmap)}")
+                varmap[sp.Dummy(f"_aux{len(varmap)}")] = w
                 side.append(w >= 0)
                 side.append(w * w == inner)
                 return w
+            if e.exp == sp.Rational(-1, 2):
+                # 1/sqrt(b): w >= 0 and w*w*b = 1 (implies b > 0)
+                inner = conv(e.base)
+                if inner is None:
+                    return None
+                w = z3.Real(f"aux{len(varmap)}")
+                varmap[sp.Dummy(f"_aux{len(varmap)}")] = w
+                side.append(w >= 0)
+                side.append(w * w * inner == 1)
+                return w
+            if e.exp.is_Integer and e.exp < 0:
+                # division: w * b**n = 1. At b = 0 this is 0 = 1,
+                # unsatisfiable, so the atom is false there -- the
+                # implicit-nonzero fact becomes part of THIS atom's
+                # meaning instead of a hidden global assumption.
+                inner = conv(e.base)
+                if inner is None:
+                    return None
+                w = z3.Real(f"aux{len(varmap)}")
+                varmap[sp.Dummy(f"_aux{len(varmap)}")] = w
+                prod = w
+                for _ in range(int(-e.exp)):
+                    prod = prod * inner
+                side.append(prod == 1)
+                return w
             base = conv(e.base)
-            if base is None or not e.exp.is_Integer or e.exp < 0:
+            if base is None or not e.exp.is_Integer:
                 return None
             out = base
             for _ in range(int(e.exp) - 1):
@@ -414,7 +523,18 @@ def _to_z3(expr, z3, varmap, side=None):
     _RELS = [(sp.Gt, lambda a, b: a > b), (sp.Ge, lambda a, b: a >= b),
              (sp.Lt, lambda a, b: a < b), (sp.Le, lambda a, b: a <= b),
              (sp.Eq, lambda a, b: a == b), (sp.Ne, lambda a, b: a != b)]
-    return bconv(expr)
+    if expr.has(sp.Piecewise):
+        expr = _lower_piecewise_rels(expr)
+    if expr.has(sp.Pow):
+        expr = _rewrite_sqrt_rels(expr)
+    if expr in (sp.true, True):
+        return z3.BoolVal(True)
+    if expr in (sp.false, False):
+        return z3.BoolVal(False)
+    out = bconv(expr)
+    if out is None:
+        return None
+    return z3.And(*side, out) if side else out
 
 
 def _witness_z3(target):
@@ -425,23 +545,21 @@ def _witness_z3(target):
     the model is a candidate, never an oracle."""
     target = _unrolled(target)
     varmap = {}
-    side = []
     constraints = []
     for a in target:
-        c = _to_z3(a, z3, varmap, side)
+        c = _to_z3(a, z3, varmap)
         if c is None:
             return None  # outside the fragment: fall back to sampling
         constraints.append(c)
     solver = z3.Solver()
     solver.set("timeout", 1000)
     solver.add(*constraints)
-    solver.add(*side)
     if solver.check() != z3.sat:
         return None
     model = solver.model()
     subs = {}
     for sym, var in varmap.items():
-        if isinstance(sym, sympy.Dummy) and sym.name.startswith("_sqrt"):
+        if isinstance(sym, sympy.Dummy) and sym.name.startswith("_aux"):
             continue  # auxiliary, not an input slot
         val = model.eval(var, model_completion=True)
         # exact rational out of z3 (decimals would round)
@@ -470,7 +588,7 @@ def explore(fn, args, max_paths=MAX_PATHS, seed=0, time_budget=120.0,
     rng = np.random.default_rng(seed)
     result = Exploration()
     seen = set()
-    worklist = [tuple(args)]
+    worklist = [(tuple(args), False)]  # (input, came_from_gap_model)
     while True:
      if not worklist:
         # bookkeeping PROPOSES coverage; the theorem is decided here:
@@ -485,12 +603,12 @@ def explore(fn, args, max_paths=MAX_PATHS, seed=0, time_budget=120.0,
                 sympy.Symbol("coverage_disjunction_unverifiable")
             )
             break
-        worklist.append(_rebuild_args(fn, tuple(args), gap))
+        worklist.append((_rebuild_args(fn, tuple(args), gap), True))
      while worklist:
         if len(result.paths) >= max_paths or _time.monotonic() > deadline:
             result.capped = True
             break
-        cur = worklist.pop()
+        cur, from_gap = worklist.pop()
         try:
             out = to_sympy(fn, *[
                 a.copy() if isinstance(a, np.ndarray) else a for a in cur
@@ -508,6 +626,19 @@ def explore(fn, args, max_paths=MAX_PATHS, seed=0, time_budget=120.0,
         atoms = _atoms_of(getattr(out, "preconditions", sympy.true))
         sig = frozenset(atoms)
         if sig in seen:
+            if from_gap:
+                # the gap model retraced a known path: the input sits
+                # outside every path condition under real semantics
+                # yet executes an existing branch (0/0-style float
+                # behavior the guards do not describe). No progress
+                # is possible; name the region and stop instead of
+                # proposing the same model forever.
+                result.undecided.append(sympy.Eq(
+                    sympy.Symbol("input_outside_all_path_conditions"),
+                    sympy.Symbol(str(tuple(str(a) for a in cur))[:80]),
+                ))
+                worklist.clear()
+                break
             continue
         seen.add(sig)
         result.paths.append(Path(args=cur, condition=atoms, out=out))
@@ -530,7 +661,7 @@ def explore(fn, args, max_paths=MAX_PATHS, seed=0, time_budget=120.0,
             if wit is None:
                 wit = _witness(full, rng)
             if wit is not None:
-                worklist.append(_rebuild_args(fn, cur, wit))
+                worklist.append((_rebuild_args(fn, cur, wit), False))
             elif _refuted(full):
                 result.infeasible.append(sympy.And(*target))
                 seen.add(tsig)
@@ -550,13 +681,25 @@ def _coverage_gap(paths, constraints):
     covers() as a theorem instead of trusting loop bookkeeping."""
     try:
         varmap = {}
-        side = []
         clauses = []
         for p in paths:
             atoms = []
             for a in _unrolled(list(p.condition)):
-                c = _to_z3(a, z3, varmap, side)
-                if c is None:
+                n_aux_before = sum(
+                    1 for k in varmap
+                    if isinstance(k, sympy.Dummy)
+                    and k.name.startswith("_aux")
+                )
+                c = _to_z3(a, z3, varmap)
+                n_aux_after = sum(
+                    1 for k in varmap
+                    if isinstance(k, sympy.Dummy)
+                    and k.name.startswith("_aux")
+                )
+                if c is None or n_aux_after > n_aux_before:
+                    # aux encodings (division, non-numeric sqrt) are
+                    # existential: sound to SEARCH with, unsound to
+                    # NEGATE. Refuse rather than invent fake gaps.
                     return "unverifiable"
                 atoms.append(c)
             clauses.append(z3.And(*atoms) if atoms else z3.BoolVal(True))
@@ -564,11 +707,10 @@ def _coverage_gap(paths, constraints):
         solver.set("timeout", 3000)
         for a in _unrolled([c for c in constraints
                             if isinstance(c, sympy.Basic)]):
-            c = _to_z3(a, z3, varmap, side)
+            c = _to_z3(a, z3, varmap)
             if c is None:
                 return "unverifiable"
             solver.add(c)
-        solver.add(*side)
         solver.add(z3.Not(z3.Or(*clauses)) if clauses else z3.BoolVal(True))
         res = solver.check()
         if res == z3.unsat:
@@ -578,7 +720,7 @@ def _coverage_gap(paths, constraints):
         model = solver.model()
         subs = {}
         for sym, var in varmap.items():
-            if isinstance(sym, sympy.Dummy) and sym.name.startswith("_sqrt"):
+            if isinstance(sym, sympy.Dummy) and sym.name.startswith("_aux"):
                 continue  # auxiliary, not an input slot
             val = model.eval(var, model_completion=True)
             frac = val.as_fraction()
