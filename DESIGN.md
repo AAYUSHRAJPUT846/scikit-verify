@@ -7,7 +7,7 @@ This document details the core architectural subsystems enabling this capability
 ## 1. Dual-State Tracing (The Two-Lane Value)
 Extracting both a numerical result and a symbolic formula requires parallel evaluation. 
 
-* **Mechanism:** Every traced value is a `Pair` containing a concrete NumPy array (or scalar) and a SymPy expression. Operations leveraging NumPy’s `__array_ufunc__` and `__array_function__` protocols are intercepted. The numerical operation executes normally while simultaneously building the matching symbolic formula.
+* **Mechanism:** Every traced value is a `Pair` containing a concrete NumPy array (or scalar) and a SymPy expression. Operations  NumPy’s `__array_ufunc__` and `__array_function__` protocols are intercepted. The numerical operation executes runs normally while simultaneously building the matching symbolic formula.
 * **Routing:** Operations are mapped via `UFUNC_TABLE` (element-wise mappings like `np.exp` → `sympy.exp`) and `FUNCTION_TABLE` (structural mappings mapping dimensions and reductions).
 * **Extension:** Element-wise functions are registered via `register_ufunc`. Structural functions require custom constructors via `register_function`.
 ```python
@@ -18,8 +18,8 @@ register_ufunc(scipy.special.ndtr, lambda z: (1 + sympy.erf(z / sympy.sqrt(2))) 
 ## 2. Control Flow and Preconditions
 Data-dependent branches (e.g., `np.median`) must record the conditions under which a specific formula was chosen.
 
-* **Mechanism:** The `Pair.__bool__` method is overridden. When evaluated in control flow (`if`, `while`), it returns the concrete truth value to execute the correct branch, while appending the symbolic relation (e.g., `a[0] <= a[2]`) to the session's guard list.
-* **Output:** The final formula includes `.preconditions`, explicitly defining the domain constraints under which the generated formula is valid. Ambiguous array-wide comparisons trigger an immediate refusal.
+* **Mechanism:** The `Pair.__bool__` method is overridden. When evaluated in control flow (`if`, `while`), it returns the concrete truth value to execute the correct branch, while connecting the symbolic relation (e.g., `a[0] <= a[2]`) to the session's guard list.
+* **Output:** The final formula includes `.preconditions`, explicitly defining the domain conditions  under which the generated formula is valid. Ambiguous array-wide comparisons trigger an immediate refusal.
 
 ## 3. AST Rewriting for Undispatchable Calls
 Standard dispatch fails for initialization functions lacking traced operands (e.g., `np.zeros()`).
@@ -51,9 +51,9 @@ register_contract(
 ```
 
 ## 5. Symbolic Loop Folding
-Unrolling long loops (e.g., iterative optimization) symbolically results in non-termination and formula explosion.
+Revealing  long loops (e.g., iterative optimization) symbolically results in non-termination and formula explosion.
 
-* **Mechanism:** For loops exceeding `FOLD_START` iterations, a recurrence state machine is engaged:
+* **Mechanism:** For loops exceeding `FOLD_START` iterations, a recurrence state machine is used:
   1. **Plant:** Inserts symbolic dummies to track state carried between iterations.
   2. **Probe:** Anti-unifies subsequent iterations into a single parameterized template.
   3. **Verify:** Checks loop body signatures (operation sequence, guards, opaque calls) at every step to ensure matching dataflow.
@@ -91,4 +91,4 @@ def test_zero_sum_property():
 ## 9. Session State Management
 Global state persistence causes test pollution and nondeterministic evaluation. 
 
-* **Mechanism:** `TraceSession` encapsulates all trace-scoped state—including active guards, opaque records, loop progress, and AST caches. A fresh session object is initialized for every `to_sympy` call, ensuring strict isolation.
+* **Mechanism:** `TraceSession` holds all trace-scoped state—including active guards, opaque records, loop progress, and AST caches. A fresh session object is initialized for every `to_sympy` call, ensuring strict isolation.
