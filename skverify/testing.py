@@ -53,7 +53,8 @@ class Verdict:
         return "\n".join(lines)
 
 
-def check_formula(fn, args, spec, indices=(), assume=(), samples=3):
+def check_formula(fn, args, spec, indices=(), assume=(), samples=3,
+                  explore=False):
     """Trace ``fn`` and compare its formula against ``spec``, per entry.
 
     The spec must come from outside the code -- a paper, a docstring,
@@ -83,6 +84,13 @@ def check_formula(fn, args, spec, indices=(), assume=(), samples=3):
     samples : int, optional
         Exact rational sample points used when the symbolic
         difference does not vanish (the float-constant tier).
+    explore : bool, optional
+        Check the spec on EVERY reachable branch, not just the one
+        ``args`` takes: branch guards are negated and solved for
+        inputs on the other side (see :func:`skverify.explore.explore`).
+        The verdict then reports coverage: "coverage proven" when
+        every unvisited region was proven infeasible, or an honest
+        qualifier when regions stay undecided.
 
     Returns
     -------
@@ -113,6 +121,8 @@ def check_formula(fn, args, spec, indices=(), assume=(), samples=3):
     ...               3 * V[i] + 1, indices=(i,)).tier
     'differs'
     """
+    if explore:
+        return _check_everywhere(fn, args, spec, indices, assume, samples)
     try:
         out = to_sympy(fn, *args)
     except NotImplementedError as e:
@@ -121,6 +131,41 @@ def check_formula(fn, args, spec, indices=(), assume=(), samples=3):
             shape=tuple(np.shape(args[0])),
             detail=f"the tracer refused: {e} (a tracer limit, not a code bug)",
         )
+    return _check_traced(out, spec, indices, assume, samples)
+
+
+def _check_everywhere(fn, args, spec, indices, assume, samples):
+    """The explored form: check the spec on EVERY reachable path.
+    The verdict is the weakest per-path tier; coverage status is part
+    of the detail, so "all paths" is claimed only when proven."""
+    from .explore import explore as _explore
+
+    ex = _explore(fn, args, constraints=tuple(assume))
+    if not ex.paths:
+        return Verdict(
+            tier="incomplete",
+            shape=tuple(np.shape(args[0])),
+            detail="no path traced: " + "; ".join(ex.refusals[:2]),
+        )
+    order = {"exact": 0, "float-constant": 1, "sampled": 2}
+    worst = None
+    for path in ex.paths:
+        v = _check_traced(path.out, spec, indices, assume, samples)
+        if not v.matches:
+            cond = " & ".join(str(a) for a in path.condition) or "True"
+            v.detail = (v.detail + f"\n  on the path where: {cond}").strip()
+            return v
+        if worst is None or order.get(v.tier, 9) > order.get(worst.tier, 9):
+            worst = v
+    worst.detail = (
+        f"all {len(ex.paths)} path(s): " + worst.detail + "; " + ex.summary()
+    )
+    if not ex.complete:
+        worst.detail += " (matches on explored paths only)"
+    return worst
+
+
+def _check_traced(out, spec, indices, assume, samples):
     shape = tuple(np.shape(out.value))
     bound = {sym: axis_idx(k) for k, sym in enumerate(indices)}
     # traced scalar symbols carry real=True; a user's plain
@@ -146,6 +191,34 @@ def check_formula(fn, args, spec, indices=(), assume=(), samples=3):
             and sym != by_name[sym.name]
         ):
             bound[sym] = by_name[sym.name]
+    traced_bases = {
+        e.base.label.name
+        for x in ([out.formula] if isinstance(out.formula, sympy.Basic)
+                  else list(out.formula)
+                  if isinstance(out.formula, sympy.NDimArray) else [])
+        if isinstance(x, sympy.Basic)
+        for e in x.atoms(sympy.Indexed)
+    }
+    unknown = sorted(
+        s.name for s in spec.free_symbols
+        if isinstance(s, sympy.Symbol)
+        and s not in bound
+        and not isinstance(s, sympy.tensor.indexed.IndexedBase)
+        and s.name not in by_name
+        and s.name not in traced_bases
+        and not any(s in f.free_symbols for f in bound)
+    )
+    if unknown:
+        return Verdict(
+            tier="undecided",
+            shape=shape,
+            spec=spec,
+            detail=(
+                "the spec references symbols the trace does not: "
+                + ", ".join(unknown)
+                + " (a typo, or a constant that should be a number?)"
+            ),
+        )
     spec_b = spec.xreplace(bound) if bound else spec
     if bound and assume:
         assume = [
@@ -409,8 +482,16 @@ def _entry_equal(t, s, entry, samples, assume=(), guards=()):
         },
         key=str,
     )
+    labels = {
+        e.base.label
+        for x in (td, sd)
+        for e in x.atoms(sympy.Indexed)
+    }
     syms = sorted(
-        (td - sd).free_symbols - set(sympy.symbols("i j k l m")), key=str
+        (td - sd).free_symbols
+        - set(sympy.symbols("i j k l m"))
+        - labels,  # an Indexed's base label is not an assignable input
+        key=str,
     )
     agree = True
     point = {}
@@ -458,7 +539,7 @@ def _entry_equal(t, s, entry, samples, assume=(), guards=()):
     ), True
 
 
-def specifies(spec, indices=(), assume=()):
+def specifies(spec, indices=(), assume=(), explore=True):
     """Assert that a function implements a formula, as a pytest test.
 
     The decorated test RETURNS ``(fn, args)`` instead of calling
@@ -475,6 +556,12 @@ def specifies(spec, indices=(), assume=()):
         Index symbols bound to output axes in order.
     assume : iterable of sympy relations, optional
         The derivation's preconditions; sample points respect them.
+    explore : bool, optional
+        True by default: the spec is checked on EVERY reachable
+        branch (Z3 finds inputs for the paths the test data never
+        took), so a green checkmark cannot hide an unchecked branch.
+        Pass ``explore=False`` for the faster single-path check when
+        a branchy function makes exploration slow.
 
     Examples
     --------
@@ -516,7 +603,8 @@ def specifies(spec, indices=(), assume=()):
     def deco(test_fn):
         def wrapper():
             fn, args = test_fn()
-            v = check_formula(fn, args, spec, indices=indices, assume=assume)
+            v = check_formula(fn, args, spec, indices=indices,
+                              assume=assume, explore=explore)
             if v.tier == "incomplete":
                 import pytest
 
@@ -530,7 +618,131 @@ def specifies(spec, indices=(), assume=()):
     return deco
 
 
-def _property(prop, assume=()):
+def check_property(fn, args, prop, assume=(), explore=True, samples=3):
+    """Check a FACT about what the code computes, on every reachable
+    path: the property rung. Where check_formula needs the closed
+    form, this needs only what the paper proves about it (symmetry,
+    normalization, a null space).
+
+    Parameters
+    ----------
+    fn, args
+        As in :func:`check_formula`.
+    prop : callable
+        Receives the traced formula, returns a sympy relation (or
+        boolean). Checked per path.
+    assume : iterable of sympy relations, optional
+        The property's domain; constrains exploration and sampling.
+    explore : bool, optional
+        True by default: the property is checked on every reachable
+        branch, since a fact that holds on the traced path can fail
+        on another.
+
+    Returns
+    -------
+    Verdict
+    """
+    if explore:
+        from .explore import explore as _explore
+
+        ex = _explore(fn, args, constraints=tuple(assume))
+        outs = [p.out for p in ex.paths]
+        cover_note = "; " + ex.summary()
+    else:
+        try:
+            outs = [to_sympy(fn, *args)]
+        except NotImplementedError as e:
+            return Verdict(
+                tier="incomplete",
+                shape=tuple(np.shape(args[0])),
+                detail=f"the tracer refused: {e} (a tracer limit, not a code bug)",
+            )
+        cover_note = " (single traced path)"
+    if not outs:
+        return Verdict(tier="incomplete", shape=tuple(np.shape(args[0])),
+                       detail="no path traced" + cover_note)
+    sampled = False
+
+    def check_claim(claim, out):
+        """None when the claim holds on this path; (verdict, used)
+        otherwise. And decomposes; Eq goes by symbolic residual;
+        inequalities by entailment (guards and assume imply claim,
+        a solver model of the negation is the failing input)."""
+        if claim in (True, sympy.true):
+            return None, False
+        if claim in (False, sympy.false):
+            return Verdict(
+                tier="differs", shape=tuple(np.shape(out.value)),
+                spec=claim, traced=out.formula,
+                detail="property is False on a path" + cover_note,
+            ), False
+        if isinstance(claim, sympy.And):
+            any_used = False
+            for part in claim.args:
+                v, used = check_claim(part, out)
+                any_used = any_used or used
+                if v is not None:
+                    return v, any_used
+            return None, any_used
+        if isinstance(claim, sympy.Eq):
+            verdict, used = _entry_equal(
+                claim.lhs - claim.rhs, sympy.Integer(0), (), samples,
+                assume, getattr(out, "preconditions", ()),
+            )
+            return verdict, used
+        # inequality: guards & assume must ENTAIL it
+        from .explore import _refuted, _witness, _witness_z3
+
+        guards = getattr(out, "preconditions", sympy.true)
+        guard_atoms = (
+            list(guards.args) if isinstance(guards, sympy.And)
+            else [] if guards in (sympy.true, True) else [guards]
+        )
+        target = (
+            [a for a in assume if isinstance(a, sympy.Basic)]
+            + guard_atoms + [sympy.Not(claim)]
+        )
+        wit = _witness_z3(target)
+        if wit is None:
+            wit = _witness(target, np.random.default_rng(0))
+        if wit is not None:
+            point = {str(k): v for k, v in wit.items()}
+            return Verdict(
+                tier="differs", shape=tuple(np.shape(out.value)),
+                spec=claim, traced=out.formula,
+                counterexample=point,
+                detail="property fails at this input" + cover_note,
+            ), True
+        if _refuted(target):
+            return None, False  # entailment proven
+        return Verdict(
+            tier="undecided", shape=tuple(np.shape(out.value)),
+            spec=claim, traced=out.formula,
+            detail="could not prove or refute the property" + cover_note,
+        ), True
+
+    for out in outs:
+        claim = prop(out.formula)
+        verdict, used = check_claim(claim, out)
+        sampled = sampled or used
+        if verdict is not None:
+            verdict.spec = claim
+            verdict.traced = out.formula
+            if "property" not in verdict.detail:
+                verdict.detail = (
+                    "property does not hold: " + str(claim)[:160]
+                    + cover_note
+                )
+            verdict.shape = tuple(np.shape(out.value))
+            return verdict
+    tier = "sampled" if sampled else "exact"
+    return Verdict(
+        tier=tier, shape=tuple(np.shape(outs[0].value)),
+        detail=f"property holds on all {len(outs)} path(s)" + cover_note,
+    )
+
+
+def _property(prop, assume=(), explore=True):
     """Assert a property of the traced certificate, no closed form
     needed.
 
@@ -564,18 +776,13 @@ def _property(prop, assume=()):
     def deco(test_fn):
         def wrapper():
             fn, args = test_fn()
-            out = to_sympy(fn, *args)
-            claim = prop(out.formula)
-            if claim in (True, sympy.true):
-                return
-            d = sympy.simplify(
-                (claim.lhs - claim.rhs).doit()
-                if isinstance(claim, sympy.Eq)
-                else claim
-            )
-            assert d in (0, sympy.true), (
-                f"property does not hold: {claim} (residual: {d})"
-            )
+            v = check_property(fn, args, prop, assume=assume,
+                               explore=explore)
+            if v.tier == "incomplete":
+                import pytest
+
+                pytest.skip(v.message())
+            assert v.matches, v.message()
 
         wrapper.__name__ = test_fn.__name__
         return wrapper
