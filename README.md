@@ -14,6 +14,7 @@
 ![CI](https://github.com/aadya940/scikit-verify/actions/workflows/ci.yml/badge.svg)
 
 * [Source code](https://github.com/aadya940/scikit-verify)
+* [Design](DESIGN.md) - how each subsystem works, one example at a time
 * [Coverage](doc/coverage.md)
 * [License](https://github.com/aadya940/scikit-verify/blob/master/LICENSE)
 * [skverify-mcp](skverify-mcp/) - MCP for mathematical feedback for coding agents

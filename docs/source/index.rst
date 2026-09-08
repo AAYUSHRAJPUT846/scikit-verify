@@ -18,6 +18,7 @@ Welcome to scikit-verify's documentation!
    :caption: Documentation Navigation:
 
    README
+   design
    api
    design_philosophy
    CONTRIBUTING
