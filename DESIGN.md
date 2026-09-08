@@ -79,16 +79,23 @@ Verifying a traced function against its own trace produces false positives.
   2. Cancellation and algebraic combination.
   3. Time-bounded simplification (prevents CI hangs).
   4. Numeric arbitration at exact rational sample points.
-* **Extension:** Use `@specifies` for closed-form mathematical matching or `@specifies.property` for behavioral invariants.
+* **Extension:** Use `@specifies` for closed-form mathematical matching or `@specifies.property` for facts about the result. The decorated test returns the function and its arguments; the trace stays under skverify's control.
 ```python
 from skverify.testing import specifies
 
 @specifies.property(lambda F: sympy.Eq(sum(F.subs(i, k) for k in range(N)), 0))
-def test_zero_sum_property():
-    pass
+def test_centering_kills_the_mean():
+    return (lambda v: v - v.mean()), (data,)
 ```
 
-## 9. Session State Management
-Global state persistence causes test pollution and nondeterministic evaluation. 
+## 9. Branch Exploration and Coverage Proofs
+One trace follows one path, so every verdict above holds for the branch the input took.
 
-* **Mechanism:** `TraceSession` holds all trace-scoped state—including active guards, opaque records, loop progress, and AST caches. A fresh session object is initialized for every `to_sympy` call, ensuring strict isolation.
+* **Mechanism:** `explore()` negates each recorded branch condition and asks the Z3 solver (a required dependency) for an input on the other side, then traces again. Witness models are converted to exact rationals and verified by substitution before use; the solver proposes, the check disposes.
+* **Completeness as a theorem:** coverage is claimed only when Z3 proves the OR of all path conditions is a tautology over the domain. A model of its negation is an input in a missed region and feeds back into the loop. Regions where the code raises, path caps, and time budgets all withhold completeness honestly rather than silently.
+* **Integration:** `check_formula(..., explore=True)` and the `@specifies` decorator (by default) check the spec on every discovered path.
+
+## 10. Session State Management
+Global state persistence causes test pollution and nondeterministic evaluation.
+
+* **Mechanism:** `TraceSession` holds all trace-scoped state, including active guards, opaque records and loop progress. The module-level session is RESET at the start of every `to_sympy` call rather than replaced, which gives each trace a clean slate; trace-order independence is pinned by dedicated determinism tests.
