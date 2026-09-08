@@ -50,17 +50,17 @@ refuse with one sentence.
 
 ## Where things are
 
-- `skverify/pair.py` — the two-lane value, indexing, in-place ops
-- `skverify/maps/numpy.py` — the op-to-sympy registry
-- `skverify/instrument/` — the tracer: call rewriting, class twins,
+- `skverify/pair.py` - the two-lane value, indexing, in-place ops
+- `skverify/maps/numpy.py` - the op-to-sympy registry
+- `skverify/instrument/` - the tracer: call rewriting, class twins,
   dispatch policy
-- `skverify/atoms.py` — compiled calls as named terms
-- `skverify/contracts.py` — the defining-equation checks (solve
+- `skverify/atoms.py` - compiled calls as named terms
+- `skverify/contracts.py` - the defining-equation checks (solve
   against Ax = b, svd against U diag(S) Vh = A, ...)
-- `skverify/dialect.py` — the extension API for new op meanings
-- `coverage/` — the boards: rerunnable scripts measuring numpy,
+- `skverify/dialect.py` - the extension API for new op meanings
+- `coverage/` - the boards: rerunnable scripts measuring numpy,
   scipy, scikit-learn, statsmodels, cvxpy, and random GitHub code
-- `skverify-mcp/` — the MCP server for coding agents
+- `skverify-mcp/` - the MCP server for coding agents
 
 ## Running the boards
 
