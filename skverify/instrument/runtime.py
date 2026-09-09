@@ -13,7 +13,6 @@ touched.
 
 
 import inspect
-
 import operator
 
 import numpy as np
@@ -21,7 +20,7 @@ import sympy
 
 from ..helpers import axis_idx
 from ..pair import Pair
-from .registries import OPAQUE_OUT
+
 
 def _bounds_of(shape):
     if isinstance(shape, (int, np.integer)):
@@ -157,7 +156,9 @@ def _skv_method(name, obj, *args, **kwargs):
     if inspect.ismodule(obj):
         # xp.astype(a, dt): a module function, not a method -- route
         # through the doorman like any other call
-        from .triage import _skv_maybe  # late: runtime and triage are mutually recursive
+        from .triage import (
+            _skv_maybe,  # late: runtime and triage are mutually recursive
+        )
 
         return _skv_maybe(getattr(obj, name))(*args, **kwargs)
     if name == "type" and args and isinstance(args[0], Pair):
@@ -179,7 +180,6 @@ def _skv_method(name, obj, *args, **kwargs):
         if name in ("astype", "copy"):
             return obj  # traced scalars; the cast/copy is math-neutral
         from ..coercion import repack
-
         from .triage import _BAG_REDUCTIONS
 
         rp = repack(obj) if name in _BAG_REDUCTIONS else None
@@ -563,8 +563,8 @@ def _skv_opaque_out(fn, out_idxs, transposed, *args, **kwargs):
     """Run an out-parameter Cython routine on the concrete lane and
     return the filled buffers as fresh opaque atoms (the traced twin
     of `fn(a, out1, out2)` rewritten to `out1, out2 = ...`)."""
-    from ..pair import _OPAQUE
     from ..contracts import check_call
+    from ..pair import _OPAQUE
 
     values = [Pair._value_of(a) for a in args]
     for pos, idx in enumerate(out_idxs):

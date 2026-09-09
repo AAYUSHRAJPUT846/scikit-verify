@@ -9,8 +9,8 @@ from collections import namedtuple
 
 import sympy
 
-from .pair import Pair
 from .helpers import _AXIS_SYMBOLS
+from .pair import Pair
 
 Evidence = namedtuple("Evidence", "verdict method detail")
 

@@ -10,43 +10,44 @@ assumptions.
 """
 
 import __future__
+
 import ast
 import inspect
 import textwrap
 
-import numpy as np
 
-from ..pair import Pair, _loop_end, _loop_iter
+from ..pair import _loop_end, _loop_iter
 from ..session import current as _session
 from .registries import OPAQUE_CALLABLES
 from .rewriter import _Rewriter
 from .runtime import (
-    _skv_dict,
-    _skv_cmp,
-    _skv_clip,
-    _skv_classof,
-    _skv_isscalar,
-    _skv_float,
-    _skv_getitem,
-    _skv_set,
     _skv_at,
+    _skv_classof,
+    _skv_clip,
+    _skv_cmp,
     _skv_concrete,
     _skv_concrete_call,
+    _skv_dict,
     _skv_empty,
-    _skv_finfo,
-    _skv_full,
     _skv_eye,
+    _skv_finfo,
+    _skv_float,
+    _skv_full,
+    _skv_getitem,
     _skv_identity,
     _skv_isinstance,
+    _skv_isscalar,
     _skv_method,
     _skv_namespace,
     _skv_neutral,
     _skv_ones,
     _skv_opaque_out,
     _skv_scalarize,
+    _skv_set,
     _skv_zeros,
 )
 from .triage import _skv_maybe, _skv_opaque, _twinnable
+
 
 def instrument(fn, depth=3):
     """A semantically identical copy of fn with math-neutral calls

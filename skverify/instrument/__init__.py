@@ -24,21 +24,26 @@ all X.
 """
 
 from .registries import *  # noqa: F401,F403
-from .runtime import *  # noqa: F401,F403
-from .triage import *  # noqa: F401,F403
-from .rewriter import *  # noqa: F401,F403
-from .twins import *  # noqa: F401,F403
-
 from .registries import (  # noqa: F401
     ALLOC,
-    NEUTRAL,
-    OPAQUE_CALLABLES,
-    NEUTRAL_METHODS,
     CONCRETE,
-    SCALARIZE,
     CONCRETE_CALLABLES,
+    NEUTRAL,
+    NEUTRAL_METHODS,
+    OPAQUE_CALLABLES,
     OPAQUE_OUT,
+    SCALARIZE,
 )
-from .twins import _CLASS_TWINS, _FN_MEMO, _instrument, _instrument_class, instrument  # noqa: F401
-from .triage import _skv_maybe, _twinnable, runtime_twin  # noqa: F401
+from .rewriter import *  # noqa: F401,F403
 from .rewriter import _Rewriter  # noqa: F401
+from .runtime import *  # noqa: F401,F403
+from .triage import *  # noqa: F401,F403
+from .triage import _skv_maybe, _twinnable, runtime_twin  # noqa: F401
+from .twins import *  # noqa: F401,F403
+from .twins import (  # noqa: F401
+    _CLASS_TWINS,
+    _FN_MEMO,
+    _instrument,
+    _instrument_class,
+    instrument,
+)

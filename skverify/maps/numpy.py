@@ -3,13 +3,12 @@
 import numpy as np
 import sympy
 
-from ..registry import (
-    UFUNC_TABLE,
-    FUNCTION_TABLE,
-)
 from ..helpers import axis_idx
-
 from ..pair import Pair
+from ..registry import (
+    FUNCTION_TABLE,
+    UFUNC_TABLE,
+)
 
 # UFUNCs, Elementwise
 _SAME = "sin cos tan sinh cosh tanh exp log sqrt floor sign".split()

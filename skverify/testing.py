@@ -18,7 +18,7 @@ import numpy as np
 import sympy
 
 from .api import to_sympy
-from .helpers import axis_idx, reevaluated
+from .helpers import axis_idx
 
 
 @dataclass

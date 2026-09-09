@@ -5,9 +5,10 @@ import inspect
 import numpy as np
 import sympy
 
+from .helpers import axis_idx
+from .helpers import ops_capped as _ops_capped
 from .pair import _GUARDS, _OPAQUE, Pair
 from .session import current as _session
-from .helpers import axis_idx, ops_capped as _ops_capped
 
 
 def to_sympy(fn, *args, **kwargs):
@@ -186,9 +187,8 @@ def to_sympy(fn, *args, **kwargs):
             # large ones STAY FOLDED -- the lemma structure is the
             # readable form, and xreplace(out.definitions) rebuilds
             # the monolith for anyone who wants it
-            from .recurrence import inline
-
             from .helpers import ops_capped
+            from .recurrence import inline
 
             rec_map = dict(_session.recurrences)
             budget = 2000

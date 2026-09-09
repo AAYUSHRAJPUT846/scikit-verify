@@ -21,6 +21,7 @@ from .registries import (
     SCALARIZE,
 )
 
+
 class _Rewriter(ast.NodeTransformer):
     def visit_Subscript(self, node):
         self.generic_visit(node)

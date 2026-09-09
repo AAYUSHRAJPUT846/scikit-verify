@@ -1,7 +1,10 @@
-from skverify.pair import Pair, IDX
 from skverify.maps import numpy as _numpy_map
 from skverify.maps import special as _special_map
+from skverify.pair import IDX, Pair
+
 from .api import to_sympy
+
+__all__ = ["Pair", "IDX", "to_sympy"]
 
 
 def _tidy(expr):
@@ -18,8 +21,9 @@ def _tidy(expr):
                 # terms outright (a dead index position), substitute
                 # anywhere it appears in arithmetic
                 fun = fun.replace(
-                    lambda x: isinstance(x, _sym.Indexed) and v in x.indices,
-                    lambda x: x.base[
+                    lambda x, v=v: isinstance(x, _sym.Indexed)
+                    and v in x.indices,
+                    lambda x, v=v, lo=lo: x.base[
                         tuple(i for i in x.indices if i != v)
                     ] if len(x.indices) > 1 else x.base[lo],
                 )

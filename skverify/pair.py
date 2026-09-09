@@ -1,14 +1,14 @@
 import numpy as np
 import sympy
 
-from .registry import (
-    UFUNC_TABLE,
-    FUNCTION_TABLE,
-)
 from .helpers import (
-    axis_idx,
     _AXIS_SYMBOLS,
+    axis_idx,
     normalize_key,
+)
+from .registry import (
+    FUNCTION_TABLE,
+    UFUNC_TABLE,
 )
 
 IDX = axis_idx(0)  # `i`
