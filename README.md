@@ -18,7 +18,6 @@
 * [Coverage](doc/coverage.md)
 * [License](https://github.com/aadya940/scikit-verify/blob/master/LICENSE)
 * [skverify-mcp](skverify-mcp/) - MCP for mathematical feedback for coding agents
-* [Blog post](https://medium.com/@aadyachinubhai/scikit-verify-translate-python-numpy-programs-to-symbolic-mathematics-c664d41ba571) - the story and the mathematics, with examples
 * [Demo](examples/penalty_matrix_check.ipynb) - a 20-page SciPy derivation, checked
 * [Branch coverage](examples/branch_coverage_check.ipynb) - Testing and maximizing code coverage using Z3
 
