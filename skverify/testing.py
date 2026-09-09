@@ -340,7 +340,13 @@ def _to_float(expr):
         pick = min if isinstance(clamps[0], sympy.Min) else max
         val = pick(float(sympy.N(a)) for a in clamps[0].args)
         e = _rebuilt(e.xreplace({clamps[0]: sympy.Float(val)}))
-    return float(sympy.N(e))
+    v = sympy.N(e)
+    try:
+        return float(v)
+    except TypeError:
+        # complex-valued formulas (FFT lane) compare by modulus of
+        # the difference; complex() is the honest numeric value
+        return complex(v)
 
 
 def _draw_point(slots, syms, rng, assume, tries=64):

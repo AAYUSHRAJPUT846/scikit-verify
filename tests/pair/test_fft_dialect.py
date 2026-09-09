@@ -92,3 +92,31 @@ class TestHonestDegradation:
         assert "fft_0" in str(out.formula)
         v = np.asarray(out.value)
         assert np.allclose(v, np.fft.fft(np.arange(4.0).reshape(2, 2)))
+
+
+class TestComplexVerdicts:
+    def test_wrong_complex_spec_is_caught_not_undecided(self):
+        # regression: the sampler's float() cast threw on complex
+        # values and fell to the give-up path, so a sign-flipped DFT
+        # spec (genuinely wrong) came back undecided. Complex
+        # disagreements must be caught like real ones.
+        j = sympy.Dummy("j", integer=True)
+        wrong = sympy.Sum(
+            V[j] * sympy.exp(2 * sympy.pi * sympy.I * j * i / N),
+            (j, 0, N - 1),
+        )  # sign flipped: this is the INVERSE kernel
+        v = check_formula(
+            lambda v: np.fft.fft(v), (VALS.copy(),), wrong, indices=(i,)
+        )
+        assert v.tier == "differs", v.message()
+
+    def test_right_complex_spec_is_exact(self):
+        j = sympy.Dummy("j", integer=True)
+        right = sympy.Sum(
+            V[j] * sympy.exp(-2 * sympy.pi * sympy.I * j * i / N),
+            (j, 0, N - 1),
+        )
+        v = check_formula(
+            lambda v: np.fft.fft(v), (VALS.copy(),), right, indices=(i,)
+        )
+        assert v.tier == "exact"
