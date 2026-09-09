@@ -5,7 +5,7 @@ import inspect
 import numpy as np
 import sympy
 
-from .helpers import axis_idx
+from .helpers import axis_idx, has_probe, swap_probes
 from .helpers import ops_capped as _ops_capped
 from .pair import _GUARDS, _OPAQUE, Pair
 from .session import current as _session
@@ -116,7 +116,7 @@ def to_sympy(fn, *args, **kwargs):
                 raise NotImplementedError(
                     "a decorator was unwrapped but changed this call's "
                     "result; the wrapper is not math-neutral here"
-                )
+                ) from None
     try:
         # every branch taken during the trace, as one hypothesis: the
         # formula holds for inputs satisfying these preconditions.
@@ -146,8 +146,6 @@ def to_sympy(fn, *args, **kwargs):
                     return _sweep_passes(e)
 
             def _sweep_passes(e):
-                from .helpers import axis_idx, has_probe, swap_probes
-
                 for _ in range(4):
                     if not has_probe(e, mkeys):
                         break

@@ -59,7 +59,7 @@ def latex(expr, aliases=None):
 
     if isinstance(expr, _sym.MatrixBase):
         names = {
-            s_: r"\mathtt{%s}" % str(s_).replace("_", r"\_")
+            s_: r"\mathtt{{{}}}".format(str(s_).replace("_", r"\_"))
             for s_ in expr.free_symbols
             if "_" in str(s_)
         }
@@ -78,7 +78,7 @@ def latex(expr, aliases=None):
                 f"T{len(aliases) + 1}",
             )
             aliases[short] = n
-            names[s] = r"\mathtt{%s}" % short
+            names[s] = rf"\mathtt{{{short}}}"
         else:
-            names[s] = r"\mathtt{%s}" % n.replace("_", r"\_")
+            names[s] = r"\mathtt{{{}}}".format(n.replace("_", r"\_"))
     return _sym.latex(expr, symbol_names=names)

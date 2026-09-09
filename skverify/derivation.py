@@ -37,7 +37,7 @@ def _loop_iter(loop_id):
         _LOOP_STACK[-1][1] += 1
     else:
         _LOOP_STACK.append([loop_id, 0])
-    _LOOP_EVENTS.append((_session.seq, tuple((l, i) for l, i in _LOOP_STACK)))
+    _LOOP_EVENTS.append((_session.seq, tuple((lid, it) for lid, it in _LOOP_STACK)))
     import sys as _sys
 
     from .recurrence import on_loop_iter
@@ -57,7 +57,7 @@ def _loop_iter(loop_id):
 def _loop_end(loop_id):
     if _LOOP_STACK and _LOOP_STACK[-1][0] == loop_id:
         _LOOP_STACK.pop()
-    _LOOP_EVENTS.append((_session.seq, tuple((l, i) for l, i in _LOOP_STACK)))
+    _LOOP_EVENTS.append((_session.seq, tuple((lid, it) for lid, it in _LOOP_STACK)))
     from .recurrence import on_loop_end
 
     on_loop_end(loop_id)

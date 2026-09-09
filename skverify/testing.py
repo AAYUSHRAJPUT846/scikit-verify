@@ -57,9 +57,6 @@ def _param_names_of(out):
     """Names of the traced inputs, from the wrapped bases present
     anywhere in formulas, guards or sealed-call definitions."""
     names = set()
-    for source in ([out.formula] if isinstance(out.formula, sympy.Basic)
-                   else []):
-        pass
     pre = getattr(out, "preconditions", sympy.true)
     pool = [pre] if isinstance(pre, sympy.Basic) else []
     for rec in getattr(out, "unchecked", ()):
@@ -366,7 +363,10 @@ def _draw_point(slots, syms, rng, assume, tries=64):
             if not isinstance(cond, sympy.Basic):
                 continue
             v = cond.doit().xreplace(subs)
-            if v is sympy.false or v == False:
+            # noqa-worthy on purpose: `not v` would call
+            # Relational.__bool__, which RAISES on partially
+            # substituted conditions; == False is a quiet non-match
+            if v is sympy.false or v == False:  # noqa: E712
                 ok = False
                 break
         if ok:

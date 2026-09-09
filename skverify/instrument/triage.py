@@ -255,9 +255,9 @@ def _skv_maybe(fn):
                     inner_sig = None
 
                 try:
-                    wrap_sig = inspect.signature(wrapper)
+                    inspect.signature(wrapper)
                 except (ValueError, TypeError):
-                    wrap_sig = None
+                    pass
 
                 def peeled(*args, **kwargs):
                     # some wrappers INJECT arguments into the inner

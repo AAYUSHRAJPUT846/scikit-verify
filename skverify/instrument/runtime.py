@@ -372,14 +372,14 @@ def _skv_cmp(op, left, right):
     if bag(left) or bag(right):
         from ..coercion import value_of
 
-        l = np.asarray(left, dtype=object)
-        r = np.asarray(right, dtype=object)
-        l, r = np.broadcast_arrays(l, r)
-        conds = np.empty(l.shape, dtype=object)
-        truths = np.empty(l.shape, dtype=bool)
+        larr = np.asarray(left, dtype=object)
+        rarr = np.asarray(right, dtype=object)
+        larr, rarr = np.broadcast_arrays(larr, rarr)
+        conds = np.empty(larr.shape, dtype=object)
+        truths = np.empty(larr.shape, dtype=bool)
         f = _CMP_OPS[op]
-        for idx in np.ndindex(l.shape):
-            c = f(l[idx], r[idx])
+        for idx in np.ndindex(larr.shape):
+            c = f(larr[idx], rarr[idx])
             conds[idx] = c
             truths[idx] = bool(value_of(c))
         # concrete bool lane keeps every downstream numpy op working;

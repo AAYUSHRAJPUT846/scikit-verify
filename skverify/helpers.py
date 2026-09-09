@@ -12,7 +12,7 @@ def axis_idx(ax):
     except IndexError:
         raise NotImplementedError(
             f"arrays beyond {len(_AXIS_SYMBOLS)}-D are not supported"
-        )
+        ) from None
 
 
 def normalize_slice(key, length):

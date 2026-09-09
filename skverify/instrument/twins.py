@@ -15,7 +15,6 @@ import ast
 import inspect
 import textwrap
 
-
 from ..pair import _loop_end, _loop_iter
 from ..session import current as _session
 from .registries import OPAQUE_CALLABLES
@@ -266,7 +265,6 @@ def _instrument(fn, depth, seen, extra=None):
     return namespace[fdef.name], tuple(sites)
 
 
-from ..session import current as _session
 
 # Historical aliases: the session owns the twin caches, so every trace
 # starts with blank ones (order-independence by construction).

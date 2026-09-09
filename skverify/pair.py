@@ -859,7 +859,7 @@ class Pair:
             parts = parts[:i] + fill + parts[i + 1 :]
         parts = parts + (slice(None),) * (len(entries) - len(parts))
         out = []
-        for ax, (entry, k) in enumerate(zip(entries, parts)):
+        for _ax, (entry, k) in enumerate(zip(entries, parts)):
             start, stop, step = entry
             length = len(range(start, stop, step))
             if isinstance(k, (int, np.integer)):
@@ -902,7 +902,7 @@ class Pair:
         off = int(offset)
         value = np.diagonal(np.asarray(self.value), off).copy()
         i0 = axis_idx(0)
-        I, J = axis_idx(0), axis_idx(1)
+        I, J = axis_idx(0), axis_idx(1)  # noqa: E741  (matrix convention)
         row = i0 + (-off if off < 0 else 0)
         col = i0 + (off if off > 0 else 0)
         # two fresh dummies, one per axis, replaced SIMULTANEOUSLY:
@@ -1361,7 +1361,7 @@ class Pair:
             (label, str(e)) for label, e in zip(labels, reduced)
         )
         width = max(
-            (len(l) for l, _ in rows if l is not None), default=0
+            (len(lbl) for lbl, _ in rows if lbl is not None), default=0
         )
         for label, rhs in rows:
             if label is None:
@@ -1387,7 +1387,7 @@ class Pair:
             return lbl
 
         tex_lines = [
-            r"\text{%s} &= %s \\" % (tex_label(lbl), sympy.latex(e))
+            rf"\text{{{tex_label(lbl)}}} &= {sympy.latex(e)} \\"
             for lbl, e in tex_rows
         ]
         # several small display blocks, not one giant aligned: math

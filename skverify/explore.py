@@ -17,6 +17,7 @@ refuted is an UNDECIDED region, named in the result -- covers() is
 then False and the caller knows exactly why.
 """
 
+import time as _time
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -203,18 +204,22 @@ def _witness(target, rng):
                 subs[x] = sympy.nsimplify(y)
         ok = True
         for eq in eqs:
-            l, r = eq.lhs, eq.rhs
-            if l in subs and not (isinstance(r, sympy.Basic) and r.free_symbols):
-                subs[l] = sympy.nsimplify(r)
-            elif r in subs and not (isinstance(l, sympy.Basic) and l.free_symbols):
-                subs[r] = sympy.nsimplify(l)
-            elif l in subs and r in subs:
-                subs[l] = subs[r]
+            lhs, rhs = eq.lhs, eq.rhs
+            if lhs in subs and not (
+                isinstance(rhs, sympy.Basic) and rhs.free_symbols
+            ):
+                subs[lhs] = sympy.nsimplify(rhs)
+            elif rhs in subs and not (
+                isinstance(lhs, sympy.Basic) and lhs.free_symbols
+            ):
+                subs[rhs] = sympy.nsimplify(lhs)
+            elif lhs in subs and rhs in subs:
+                subs[lhs] = subs[rhs]
             else:
                 # one unknown slot: SOLVE the equality instead of
                 # hoping to sample it (sinc's Eq(pi*x, 0) branch)
                 free = [e for e in subs if isinstance(e, sympy.Basic)
-                        and (l - r).has(e)]
+                        and (lhs - rhs).has(e)]
                 solved = False
                 if len(free) >= 1 and trial < 8:
                     tgt = free[0]
@@ -223,7 +228,9 @@ def _witness(target, rng):
                         # solve() rejects Indexed unknowns: go through
                         # a Dummy stand-in
                         d = sympy.Dummy("w", real=True)
-                        expr = (l - r).xreplace(others).xreplace({tgt: d})
+                        expr = (
+                            (lhs - rhs).xreplace(others).xreplace({tgt: d})
+                        )
                         sol = sympy.solve(expr, d, rational=True)
                         if sol:
                             subs[tgt] = sympy.nsimplify(sol[0])
@@ -539,10 +546,10 @@ def _to_z3(expr, z3, varmap):
                          # around aux constraints would be unsound
         for cls, mk in _RELS:
             if isinstance(expr, cls):
-                l, r = conv(expr.lhs), conv(expr.rhs)
-                if l is None or r is None:
+                zl, zr = conv(expr.lhs), conv(expr.rhs)
+                if zl is None or zr is None:
                     return None
-                return mk(l, r)
+                return mk(zl, zr)
         return None
 
     _RELS = [(sp.Gt, lambda a, b: a > b), (sp.Ge, lambda a, b: a >= b),
@@ -564,6 +571,19 @@ def _to_z3(expr, z3, varmap):
     return z3.And(*side, out) if side else out
 
 
+def _model_to_subs(model, varmap):
+    """Exact rational assignments out of a z3 model, skipping the
+    auxiliary variables encodings introduce (they are not inputs)."""
+    subs = {}
+    for sym, var in varmap.items():
+        if isinstance(sym, sympy.Dummy) and sym.name.startswith("_aux"):
+            continue
+        val = model.eval(var, model_completion=True)
+        frac = val.as_fraction()
+        subs[sym] = sympy.Rational(frac.numerator, frac.denominator)
+    return subs
+
+
 def _witness_z3(target):
     """Solver-generated witness: exact rationals from a z3 model over
     the polynomial fragment (nlsat decides it). Returns None when an
@@ -583,16 +603,7 @@ def _witness_z3(target):
     solver.add(*constraints)
     if solver.check() != z3.sat:
         return None
-    model = solver.model()
-    subs = {}
-    for sym, var in varmap.items():
-        if isinstance(sym, sympy.Dummy) and sym.name.startswith("_aux"):
-            continue  # auxiliary, not an input slot
-        val = model.eval(var, model_completion=True)
-        # exact rational out of z3 (decimals would round)
-        frac = val.as_fraction()
-        subs[sym] = sympy.Rational(frac.numerator, frac.denominator)
-    return subs
+    return _model_to_subs(solver.model(), varmap)
 
 
 def explore(fn, args, max_paths=MAX_PATHS, seed=0, time_budget=120.0,
@@ -609,95 +620,93 @@ def explore(fn, args, max_paths=MAX_PATHS, seed=0, time_budget=120.0,
     past it the result is marked capped and completeness is never
     claimed.
     """
-    import time as _time
-
     deadline = _time.monotonic() + time_budget
     rng = np.random.default_rng(seed)
     result = Exploration()
     seen = set()
     worklist = [(tuple(args), False)]  # (input, came_from_gap_model)
     while True:
-     if not worklist:
-        # bookkeeping PROPOSES coverage; the theorem is decided here:
-        # is the OR of path conditions a tautology over the domain?
-        # A model of its negation IS an input in a missed region --
-        # feed it back and keep exploring until Z3 says unsat.
-        gap = _coverage_gap(result.paths, constraints)
-        if gap is None:
-            break  # coverage proven
-        if gap == "unverifiable":
-            result.undecided.append(
-                sympy.Symbol("coverage_disjunction_unverifiable")
-            )
-            break
-        worklist.append((_rebuild_args(fn, tuple(args), gap), True))
-     while worklist:
-        if len(result.paths) >= max_paths or _time.monotonic() > deadline:
-            result.capped = True
-            break
-        cur, from_gap = worklist.pop()
-        try:
-            out = to_sympy(fn, *[
-                a.copy() if isinstance(a, np.ndarray) else a for a in cur
-            ])
-        except NotImplementedError as e:
-            result.refusals.append(str(e)[:120])
-            continue
-        except Exception as e:
-            # the polite-failure contract already reran the REAL
-            # function: a propagating error means the code itself
-            # raises on this input. That is a path outcome (a domain
-            # boundary), not a crash of ours.
-            result.errors.append(f"{type(e).__name__}: {str(e)[:100]}")
-            continue
-        atoms = _atoms_of(getattr(out, "preconditions", sympy.true))
-        sig = frozenset(atoms)
-        if sig in seen:
-            if from_gap:
-                # the gap model retraced a known path: the input sits
-                # outside every path condition under real semantics
-                # yet executes an existing branch (0/0-style float
-                # behavior the guards do not describe). No progress
-                # is possible; name the region and stop instead of
-                # proposing the same model forever.
-                result.undecided.append(sympy.Eq(
-                    sympy.Symbol("input_outside_all_path_conditions"),
-                    sympy.Symbol(str(tuple(str(a) for a in cur))[:80]),
-                ))
-                worklist.clear()
+        if not worklist:
+            # bookkeeping PROPOSES coverage; the theorem is decided here:
+            # is the OR of path conditions a tautology over the domain?
+            # A model of its negation IS an input in a missed region --
+            # feed it back and keep exploring until Z3 says unsat.
+            gap = _coverage_gap(result.paths, constraints)
+            if gap is None:
+                break  # coverage proven
+            if gap == "unverifiable":
+                result.undecided.append(
+                    sympy.Symbol("coverage_disjunction_unverifiable")
+                )
                 break
-            continue
-        seen.add(sig)
-        result.paths.append(Path(args=cur, condition=atoms, out=out))
-        # DART step: negate each guard with the earlier ones held
-        for k in range(len(atoms)):
-            if _time.monotonic() > deadline:
+            worklist.append((_rebuild_args(fn, tuple(args), gap), True))
+        while worklist:
+            if len(result.paths) >= max_paths or _time.monotonic() > deadline:
                 result.capped = True
                 break
-            target = list(atoms[:k]) + [_negate(atoms[k])]
-            tsig = frozenset(target)
-            full = [c for c in constraints if isinstance(c, sympy.Basic)] \
-                + target
-            if tsig in seen:
+            cur, from_gap = worklist.pop()
+            try:
+                out = to_sympy(fn, *[
+                    a.copy() if isinstance(a, np.ndarray) else a for a in cur
+                ])
+            except NotImplementedError as e:
+                result.refusals.append(str(e)[:120])
                 continue
-            wit = _witness_z3(full)
-            if wit is not None and not all(
-                _holds(a, wit) for a in _unrolled(full)
-            ):
-                wit = None  # model failed verification: never trust it
-            if wit is None:
-                wit = _witness(full, rng)
-            if wit is not None:
-                worklist.append((_rebuild_args(fn, cur, wit), False))
-            elif _refuted(full):
-                result.infeasible.append(sympy.And(*target))
-                seen.add(tsig)
-            else:
-                result.undecided.append(sympy.And(*target))
-                seen.add(tsig)
-     if (result.capped or result.undecided or result.refusals
-             or result.errors):
-        break  # completeness already impossible: no theorem to close
+            except Exception as e:
+                # the polite-failure contract already reran the REAL
+                # function: a propagating error means the code itself
+                # raises on this input. That is a path outcome (a domain
+                # boundary), not a crash of ours.
+                result.errors.append(f"{type(e).__name__}: {str(e)[:100]}")
+                continue
+            atoms = _atoms_of(getattr(out, "preconditions", sympy.true))
+            sig = frozenset(atoms)
+            if sig in seen:
+                if from_gap:
+                    # the gap model retraced a known path: the input sits
+                    # outside every path condition under real semantics
+                    # yet executes an existing branch (0/0-style float
+                    # behavior the guards do not describe). No progress
+                    # is possible; name the region and stop instead of
+                    # proposing the same model forever.
+                    result.undecided.append(sympy.Eq(
+                        sympy.Symbol("input_outside_all_path_conditions"),
+                        sympy.Symbol(str(tuple(str(a) for a in cur))[:80]),
+                    ))
+                    worklist.clear()
+                    break
+                continue
+            seen.add(sig)
+            result.paths.append(Path(args=cur, condition=atoms, out=out))
+            # DART step: negate each guard with the earlier ones held
+            for k in range(len(atoms)):
+                if _time.monotonic() > deadline:
+                    result.capped = True
+                    break
+                target = list(atoms[:k]) + [_negate(atoms[k])]
+                tsig = frozenset(target)
+                full = [c for c in constraints if isinstance(c, sympy.Basic)] \
+                    + target
+                if tsig in seen:
+                    continue
+                wit = _witness_z3(full)
+                if wit is not None and not all(
+                    _holds(a, wit) for a in _unrolled(full)
+                ):
+                    wit = None  # model failed verification: never trust it
+                if wit is None:
+                    wit = _witness(full, rng)
+                if wit is not None:
+                    worklist.append((_rebuild_args(fn, cur, wit), False))
+                elif _refuted(full):
+                    result.infeasible.append(sympy.And(*target))
+                    seen.add(tsig)
+                else:
+                    result.undecided.append(sympy.And(*target))
+                    seen.add(tsig)
+        if (result.capped or result.undecided or result.refusals
+                 or result.errors):
+            break  # completeness already impossible: no theorem to close
     return result
 
 
@@ -744,15 +753,7 @@ def _coverage_gap(paths, constraints):
             return None  # coverage proven
         if res != z3.sat:
             return "unverifiable"
-        model = solver.model()
-        subs = {}
-        for sym, var in varmap.items():
-            if isinstance(sym, sympy.Dummy) and sym.name.startswith("_aux"):
-                continue  # auxiliary, not an input slot
-            val = model.eval(var, model_completion=True)
-            frac = val.as_fraction()
-            subs[sym] = sympy.Rational(frac.numerator, frac.denominator)
-        return subs
+        return _model_to_subs(solver.model(), varmap)
     except Exception:
         return "unverifiable"
 

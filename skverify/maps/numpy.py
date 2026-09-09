@@ -253,8 +253,8 @@ def _held_sum(body, *limits):
         # frees a symbol that the input had bound (the condition
         # escaped its binder). Benign folds keep the free-symbol set.
         binders = {lim[0] for lim in built.limits} if hasattr(built, "limits") else set()
-        expected_free = body.free_symbols - {l[0] for l in limits}
-        escaped = (built.free_symbols | binders) - expected_free - {l[0] for l in limits}
+        expected_free = body.free_symbols - {lim[0] for lim in limits}
+        escaped = (built.free_symbols | binders) - expected_free - {lim[0] for lim in limits}
         escaped = {e for e in escaped if e in built.free_symbols and e not in expected_free}
         if escaped:
             # a correct Sum could be BUILT by bypassing the ctor, but any
@@ -315,8 +315,8 @@ def _held_prod(body, *limits):
     built = sympy.Product(body, *limits)
     if body.has(sympy.Piecewise) and body.has(sympy.Product):
         binders = {lim[0] for lim in built.limits} if hasattr(built, "limits") else set()
-        expected_free = body.free_symbols - {l[0] for l in limits}
-        escaped = (built.free_symbols | binders) - expected_free - {l[0] for l in limits}
+        expected_free = body.free_symbols - {lim[0] for lim in limits}
+        escaped = (built.free_symbols | binders) - expected_free - {lim[0] for lim in limits}
         escaped = {e for e in escaped if e in built.free_symbols and e not in expected_free}
         if escaped:
             raise NotImplementedError(
@@ -829,7 +829,7 @@ def _gradient(f, *varargs, axis=None, edge_order=1):
         spacing = list(varargs)
     else:
         raise NotImplementedError("gradient: spacing arity mismatch")
-        
+
     if axis is None:
         axes = list(range(nd))
     elif np.isscalar(axis):
@@ -1638,7 +1638,7 @@ def _nan_to_num(x, copy=True, nan=0.0, posinf=None, neginf=None):
         return Pair(fixed, x.formula, x._axis_bounds, steps=(x,))
     if vals.ndim == 0:
         return Pair(fixed, sympy.Float(float(fixed)), None, steps=(x,))
-    sym = axis_idx(0)
+    axis_idx(0)
     out = np.empty(vals.shape, dtype=object)
     for idx in np.ndindex(vals.shape):
         if np.isfinite(vals[idx]):

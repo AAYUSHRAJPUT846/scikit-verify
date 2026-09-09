@@ -107,7 +107,7 @@ def _design_matrix_probe(args, result):
 def _solve_residual(args, result):
     a, b = np.asarray(args[0]), np.asarray(args[1])
     x = np.asarray(result)
-    rng = np.random.default_rng(0)
+    np.random.default_rng(0)
     r = a @ x - b
     scale = np.linalg.norm(b) + np.linalg.norm(a) * np.linalg.norm(x)
     if scale == 0:
