@@ -53,6 +53,28 @@ class Verdict:
         return "\n".join(lines)
 
 
+def _param_names_of(out):
+    """Names of the traced inputs, from the wrapped bases present
+    anywhere in formulas, guards or sealed-call definitions."""
+    names = set()
+    for source in ([out.formula] if isinstance(out.formula, sympy.Basic)
+                   else []):
+        pass
+    pre = getattr(out, "preconditions", sympy.true)
+    pool = [pre] if isinstance(pre, sympy.Basic) else []
+    for rec in getattr(out, "unchecked", ()):
+        if isinstance(rec, tuple) and len(rec) >= 3:
+            names.update(
+                part.split("[")[0].split("(")[-1].strip()
+                for part in str(rec[-1][-1]).replace(")", ",").split(",")
+                if part.strip()
+            )
+    for e in pool:
+        for a in e.atoms(sympy.Indexed):
+            names.add(str(a.base.label))
+    return names
+
+
 def check_formula(fn, args, spec, indices=(), assume=(), samples=3,
                   explore=False):
     """Trace ``fn`` and compare its formula against ``spec``, per entry.
@@ -170,14 +192,20 @@ def _check_traced(out, spec, indices, assume, samples):
     bound = {sym: axis_idx(k) for k, sym in enumerate(indices)}
     # traced scalar symbols carry real=True; a user's plain
     # Symbol("u") must still mean the same thing. Bind by name.
-    if isinstance(out.formula, sympy.Basic):
-        traced_syms = out.formula.free_symbols
-    elif isinstance(out.formula, sympy.NDimArray):
-        traced_syms = set().union(
-            *(e.free_symbols for e in out.formula if isinstance(e, sympy.Basic))
-        )
-    else:
-        traced_syms = set()
+    def _elements(f):
+        if isinstance(f, sympy.Basic):
+            return [f]
+        if isinstance(f, sympy.NDimArray):
+            return [e for e in f if isinstance(e, sympy.Basic)]
+        if isinstance(f, np.ndarray) and f.dtype == object:
+            # traces of some array results come back as numpy object
+            # arrays of expressions rather than NDimArray
+            return [e for e in f.ravel() if isinstance(e, sympy.Basic)]
+        return []
+
+    traced_syms = set().union(
+        *(e.free_symbols for e in _elements(out.formula))
+    ) if _elements(out.formula) else set()
     by_name = {t.name: t for t in traced_syms if isinstance(t, sympy.Symbol)}
     user_syms = set(spec.free_symbols)
     for f in assume:
@@ -193,10 +221,7 @@ def _check_traced(out, spec, indices, assume, samples):
             bound[sym] = by_name[sym.name]
     traced_bases = {
         e.base.label.name
-        for x in ([out.formula] if isinstance(out.formula, sympy.Basic)
-                  else list(out.formula)
-                  if isinstance(out.formula, sympy.NDimArray) else [])
-        if isinstance(x, sympy.Basic)
+        for x in _elements(out.formula)
         for e in x.atoms(sympy.Indexed)
     }
     unknown = sorted(
@@ -209,6 +234,25 @@ def _check_traced(out, spec, indices, assume, samples):
         and not any(s in f.free_symbols for f in bound)
     )
     if unknown:
+        sealed = [str(r[0]) for r in getattr(out, "unchecked", ())
+                  if isinstance(r, tuple)]
+        if sealed and any(u in _param_names_of(out) for u in unknown):
+            # the input exists but the computation routed through
+            # compiled calls: the formula is in sealed atoms, and a
+            # formula-level spec cannot reach the inputs behind them
+            return Verdict(
+                tier="incomplete",
+                shape=shape,
+                spec=spec,
+                detail=(
+                    "the input(s) " + ", ".join(unknown)
+                    + " do not appear in the traced formula: the "
+                    "computation routed through sealed compiled calls ("
+                    + ", ".join(sealed[:3])
+                    + "). Formula-level specs stop at that boundary; "
+                    "contracts on the sealed calls still apply."
+                ),
+            )
         return Verdict(
             tier="undecided",
             shape=shape,
@@ -228,7 +272,10 @@ def _check_traced(out, spec, indices, assume, samples):
 
     entries = list(np.ndindex(shape)) if shape else [()]
     sampled = False
-    is_array = isinstance(out.formula, sympy.NDimArray)
+    is_array = isinstance(out.formula, sympy.NDimArray) or (
+        isinstance(out.formula, np.ndarray)
+        and out.formula.dtype == object
+    )
     for entry in entries:
         at = {axis_idx(k): int(v) for k, v in enumerate(entry)}
         if is_array:
