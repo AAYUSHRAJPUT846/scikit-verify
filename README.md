@@ -78,7 +78,7 @@ y = sympy.IndexedBase("y")
 
 @specifies((y[0] + 4*y[1] + 2*y[2] + 4*y[3] + y[4]) / 3)
 def test_simpson_is_the_textbook_rule():
-    return (lambda v: simpson(v)), (np.array([0.7, 1.2, 2.5, 0.3, 0.4]),)
+    return (lambda y: simpson(y)), (np.array([0.7, 1.2, 2.5, 0.3, 0.4]),)
 ```
 
 A passing test means the code computes that formula, proved
@@ -109,7 +109,7 @@ When nobody knows the closed form, state a fact about it instead.
 The entries sum to one, the matrix is symmetric, a null space holds:
 
 ```python
-@specifies.property(lambda F: sympy.Eq(sum(F.subs(i, k) for k in range(3)), 1))
+@specifies.property(lambda F: sympy.Eq(sum(F[k] for k in range(3)), 1))
 def test_softmax_normalizes():
     return (lambda v: softmax(v)), (np.array([0.7, -1.2, 2.5]),)
 ```
