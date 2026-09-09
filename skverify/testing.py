@@ -717,6 +717,37 @@ def check_property(fn, args, prop, assume=(), explore=True, samples=3):
         a solver model of the negation is the failing input)."""
         if claim in (True, sympy.true):
             return None, False
+        sealed = {
+            str(r[0]) for r in getattr(out, "unchecked", ())
+            if isinstance(r, tuple)
+        }
+        if sealed and isinstance(claim, sympy.Basic):
+            atom_bases = {
+                str(e.base.label)
+                for e in claim.atoms(sympy.Indexed)
+            } | {s_.name for s_ in claim.free_symbols
+                 if isinstance(s_, sympy.Symbol)}
+            touched = {
+                b for b in atom_bases
+                if any(b.startswith(nm) for nm in sealed)
+            }
+            if touched:
+                # entries of a sealed call are DETERMINED by the real
+                # inputs, not free: arbitrating over them invents
+                # impossible counterexamples. The honest tier is
+                # incomplete, boundary named.
+                return Verdict(
+                    tier="incomplete",
+                    shape=tuple(np.shape(out.value)),
+                    spec=claim,
+                    detail=(
+                        "the fact ranges over sealed compiled outputs ("
+                        + ", ".join(sorted(touched)[:3])
+                        + "); their entries are determined by the "
+                        "inputs, so symbolic arbitration cannot "
+                        "decide it"
+                    ),
+                ), False
         if claim in (False, sympy.false):
             return Verdict(
                 tier="differs", shape=tuple(np.shape(out.value)),
@@ -775,7 +806,7 @@ def check_property(fn, args, prop, assume=(), explore=True, samples=3):
         if verdict is not None:
             verdict.spec = claim
             verdict.traced = out.formula
-            if "property" not in verdict.detail:
+            if verdict.tier != "incomplete" and "property" not in verdict.detail:
                 verdict.detail = (
                     "property does not hold: " + str(claim)[:160]
                     + cover_note
